@@ -456,9 +456,8 @@ def get_recommendations(user_text, accumulated_tags, inventory):
     )
 
     top_pool = ranked[:10]
-    random_results = random.sample(top_pool, min(3, len(top_pool)))
 
-    return random_results, target_model, mentioned_brands
+    return ranked[:3], target_model, mentioned_brands
 
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -487,7 +486,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
         print("\n[DEBUG] inventory brand/model 샘플")
         for s in inventory[:10]:
-            print(f"brand={repr(s['brand'])}, model={repr(s['model'])}, color={repr(s['color'])}, stock={repr(s.get('stock'))}")
+            print(f"brand={repr(s['brand'])}, model={repr(s['model'])}, colors={repr(s['colors'])}, stock={repr(s.get('stock'))}")
 
         ranked, target_model, mentioned_brands = get_recommendations(user_text, accumulated_tags, inventory)
 
