@@ -475,8 +475,8 @@ class RobotManager:
 
     def _post_arrive(self, state: _RobotState):
         """도착 시 MOOsinsa 서버에 POST 요청."""
-        ip = os.getenv("MOOSIONSA_MAIN_SERVER_IP")
-        port = int(os.getenv("MOOSIONSA_MAIN_SERVER_PORT") or 0)
+        ip = os.getenv("MOOSINSA_MAIN_SERVER_IP")
+        port = int(os.getenv("MOOSINSA_MAIN_SERVER_PORT") or 0)
         if not ip or not port:
             print(f"[fleet] {state.robot_id} _post_arrive: MOOSIONSA_MAIN_SERVER_IP or PORT not set")
             return
