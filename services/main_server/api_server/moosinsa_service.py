@@ -193,7 +193,7 @@ class SearchResponse(BaseModel):
 
 # M_LLM TAG_SCHEMA 키 목록 (llm_server_2.py 와 동일, accumulated_tags 초기화에 사용)
 TAG_SCHEMA_KEYS = [
-    "activity", "style", "feature", "color",
+    "activity", "style", "feature", "colors",
     "brand", "season_weather", "price", "target",
 ]
 
@@ -605,7 +605,7 @@ class CameraUDPServer:
 #       - 입고/불출 이벤트 기록
 #
 #     테이블 구조 (참고):
-#       shoes (SSID PK, brand, model, size, color, stock, location, ...)
+#       shoes (SSID PK, brand, model, size, colors, stock, location, ...)
 #     """
 #
 #     async def check_stock(self, ssid: str) -> bool: ...
