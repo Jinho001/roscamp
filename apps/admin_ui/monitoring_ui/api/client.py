@@ -248,8 +248,17 @@ class PollingWorker(QObject):
         self._timer.setInterval(interval_ms)
         self._timer.timeout.connect(self._poll)
         self._use_mock = False
+        # [폴링주기분리] tick 카운터 — 카테고리별 주기 throttling 에 사용.
+        # base interval = 2초.   fast=매 tick / medium=5tick=10초 / slow=15tick=30초
+        self._tick: int = -1   # 첫 _poll 호출 시 0 으로 증가 → 모든 카테고리 1회 fire
+
+    # 폴링 카테고리별 tick 배수
+    _FAST_EVERY   = 1   # robots/seats/kiosk_seats/requests   → 2초 (실시간성)
+    _MEDIUM_EVERY = 5   # dashboard/schedule                  → 10초 (시나리오 완료 시 변경)
+    _SLOW_EVERY   = 15  # inventory                           → 30초 (입고 시에만 변경)
 
     def start(self):
+        self._tick = -1   # start 호출마다 리셋 → 첫 poll 에서 모든 fetcher 발동
         self._poll()
         self._timer.start()
 
@@ -257,14 +266,21 @@ class PollingWorker(QObject):
         self._timer.stop()
 
     def _poll(self):
-        self._fetch_dashboard()
-        self._fetch_robots()
-        self._fetch_schedule()
-        self._fetch_inventory()
-        self._fetch_seats()
-        # [실로봇연동] kiosk_tryon 과 동일 source — management_screen 좌석 점유 표시용
-        self._fetch_kiosk_seats()
-        self._fetch_requests()
+        # [폴링주기분리] tick 증가 후 카테고리별 주기 매칭으로 fetch 트리거
+        self._tick += 1
+        # fast — 매 tick (2초)
+        if self._tick % self._FAST_EVERY == 0:
+            self._fetch_robots()
+            self._fetch_seats()
+            self._fetch_kiosk_seats()  # kiosk_tryon 과 동일 source
+            self._fetch_requests()
+        # medium — 5 tick (10초)
+        if self._tick % self._MEDIUM_EVERY == 0:
+            self._fetch_dashboard()
+            self._fetch_schedule()
+        # slow — 15 tick (30초): 재고는 입고 시에만 변하므로 자주 가져올 필요 없음
+        if self._tick % self._SLOW_EVERY == 0:
+            self._fetch_inventory()
 
     # ── individual fetchers ──────────────────────────────────────────────
 

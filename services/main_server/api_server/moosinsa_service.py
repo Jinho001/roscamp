@@ -2084,11 +2084,17 @@ async def api_inventory():
 
     items: list[dict] = []
     for shoe in shoes:
-        shoe_id = shoe.get("shoe_id") or ""
+        shoe_id = (shoe.get("shoe_id") or "").strip()
         brand   = (shoe.get("brand") or "").strip()
         model   = (shoe.get("model") or "").strip()
+
+        # [실로봇연동][빈행필터] 시드되지 않은 placeholder 행 (id 1,2,4,5,7,8 같이
+        # brand/model/shoe_id 가 모두 비어있는 더미) 은 응답에서 제외.
+        if not shoe_id and not brand and not model:
+            continue
+
         # 사용자에게 표시할 상품명 — '브랜드 모델'. 둘 다 비면 shoe_id 로 폴백.
-        name    = (f"{brand} {model}".strip()) or shoe_id
+        name = (f"{brand} {model}".strip()) or shoe_id
 
         try:
             inv_rows = get_shoe_information_by_shoe_id_from_inventory(shoe_id) or []
@@ -2097,8 +2103,15 @@ async def api_inventory():
         except Exception:
             inv_rows = []
 
-        # 사이즈 변형이 없으면 stock=0 으로 1행만 노출 (선반위치 미지정)
-        if not inv_rows:
+        # [빈행필터] inv_rows 자체도 size=0 의 빈 행이 섞여 있을 수 있음 — 거름.
+        valid_rows = [
+            inv for inv in inv_rows
+            if (inv.get("size") or 0) > 0
+        ]
+
+        # 유효한 사이즈 변형이 하나도 없으면 — 신발 자체는 등록됐지만 재고 미입고 상태.
+        # 1행으로 표시 (재고/위치 미지정).
+        if not valid_rows:
             items.append({
                 "name":          name,
                 "size":          0,
@@ -2106,7 +2119,7 @@ async def api_inventory():
                 "warehouse_pos": "—",
             })
             continue
-        for inv in inv_rows:
+        for inv in valid_rows:
             items.append({
                 "name":          name,
                 "size":          inv.get("size") or 0,

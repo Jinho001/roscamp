@@ -96,6 +96,10 @@ class ManagementScreen(QWidget):
         # 같은 백엔드 task_id (TRY-####) 가 매 폴링마다 다시 와도 동일한 UI 번호 유지.
         self._ui_req_id_map: dict[str, int] = {}
         self._next_ui_req_id: int = 1
+        # [페이지네이션] 재고 표 페이지 상태 — 매 폴링마다 전체 행 재생성 비용 절감.
+        self._inv_page_size: int = 25
+        self._inv_page: int = 0
+        self._inv_filtered: list = []   # 현재 검색 필터 통과한 항목 (페이지 슬라이스 전 전체)
         self._scale = 1.0
         self._build_ui()
         self.apply_scale(1.0)
@@ -208,6 +212,24 @@ class ManagementScreen(QWidget):
         # [화면꽉채우기] 재고 표가 카드 내부에서 세로로 확장
         self.tbl_inv.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._inv_lay.addWidget(self.tbl_inv, 1)
+
+        # [페이지네이션] 표 아래 페이지 네비게이션 행
+        self._page_row = QHBoxLayout()
+        self.btn_inv_prev = QPushButton("◀ 이전")
+        self.btn_inv_next = QPushButton("다음 ▶")
+        self.btn_inv_prev.setObjectName("btnSearch")   # 같은 톤 사용
+        self.btn_inv_next.setObjectName("btnSearch")
+        self.btn_inv_prev.clicked.connect(self._inv_prev_page)
+        self.btn_inv_next.clicked.connect(self._inv_next_page)
+        self.lbl_inv_page = QLabel("0 건")
+        self.lbl_inv_page.setAlignment(Qt.AlignCenter)
+        self.lbl_inv_page.setStyleSheet(
+            "color:#57606a; font-family:'Courier New',monospace; font-size:11px;"
+        )
+        self._page_row.addWidget(self.btn_inv_prev)
+        self._page_row.addWidget(self.lbl_inv_page, 1)
+        self._page_row.addWidget(self.btn_inv_next)
+        self._inv_lay.addLayout(self._page_row)
 
         self._mid_row.addWidget(inv_card, 55)
 
@@ -438,19 +460,21 @@ class ManagementScreen(QWidget):
                 f"{robot} — 진행 중 시나리오 없음. cmd_vel(0,0) 만 발행 (정지 확인)"
             )
 
-    def _filter_inventory(self, text: str):
+    def _filter_inventory(self, text: str, reset_page: bool = True):
         """[실로봇연동] 검색 형식 '상품명 사이즈' (스페이스 한 칸 구분).
-
-        - 빈 입력 → 전체 표시, 안내 문구 없음
-        - 마지막 토큰이 숫자인 'name size' → 상품명 부분일치 + 사이즈 정확일치
-            • 매칭 → 결과 표시 + '재고가 N개 있습니다'
-            • 매칭 없음 → 표 비우기 + '입고되지 않은 상품입니다'
-        - 그 외 (단일 토큰 또는 숫자 아닌 마지막 토큰) → 상품명 부분일치만
+        [페이지네이션]
+          - 검색 결과 전체를 _inv_filtered 에 보관.
+          - reset_page=True (기본, 사용자 입력 시) → 1 페이지부터 표시.
+          - reset_page=False (폴링 갱신 시) → 보고 있던 페이지 유지
+            (_render_inv_page 가 필요하면 페이지 인덱스 클램프).
         """
         text = (text or "").strip()
         if not text:
             self.lbl_inv_msg.setText("")
-            self._populate_inventory(self._all_inventory)
+            self._inv_filtered = list(self._all_inventory)
+            if reset_page:
+                self._inv_page = 0
+            self._render_inv_page()
             return
 
         parts = text.rsplit(" ", 1)
@@ -465,10 +489,12 @@ class ManagementScreen(QWidget):
             if matched:
                 stock_total = sum(int(r.get("stock") or 0) for r in matched)
                 self._set_inv_msg(f"재고가 {stock_total}개 있습니다", ok=True)
-                self._populate_inventory(matched)
             else:
                 self._set_inv_msg("입고되지 않은 상품입니다", ok=False)
-                self._populate_inventory([])
+            self._inv_filtered = matched
+            if reset_page:
+                self._inv_page = 0
+            self._render_inv_page()
             return
 
         # 상품명만 입력 — 부분일치
@@ -478,7 +504,40 @@ class ManagementScreen(QWidget):
             if name_q in (r.get("name", "") or "").lower()
         ]
         self.lbl_inv_msg.setText("")
-        self._populate_inventory(matched)
+        self._inv_filtered = matched
+        if reset_page:
+            self._inv_page = 0
+        self._render_inv_page()
+
+    # [페이지네이션] 현재 페이지만 _populate_inventory 에 넘김 + 라벨/버튼 갱신
+    def _render_inv_page(self):
+        total = len(self._inv_filtered)
+        size  = self._inv_page_size
+        pages = max(1, (total + size - 1) // size)
+        # 페이지 인덱스 클램프 (필터 결과 줄어들면 페이지 인덱스 보정)
+        self._inv_page = max(0, min(self._inv_page, pages - 1))
+
+        start = self._inv_page * size
+        end   = start + size
+        self._populate_inventory(self._inv_filtered[start:end])
+
+        self.lbl_inv_page.setText(
+            f"{total} 건 · {self._inv_page + 1} / {pages} 페이지"
+        )
+        self.btn_inv_prev.setEnabled(self._inv_page > 0)
+        self.btn_inv_next.setEnabled(self._inv_page < pages - 1)
+
+    def _inv_prev_page(self):
+        if self._inv_page > 0:
+            self._inv_page -= 1
+            self._render_inv_page()
+
+    def _inv_next_page(self):
+        total = len(self._inv_filtered)
+        pages = max(1, (total + self._inv_page_size - 1) // self._inv_page_size)
+        if self._inv_page < pages - 1:
+            self._inv_page += 1
+            self._render_inv_page()
 
     def _set_inv_msg(self, msg: str, ok: bool):
         """[실로봇연동] 검색 결과 안내 라벨 — 색상으로 in-stock / not-stocked 구분."""
@@ -549,8 +608,10 @@ class ManagementScreen(QWidget):
                 lbl_val.setText("—")
 
     def on_inventory_updated(self, items: list):
+        # [페이지네이션] 폴링 갱신 시엔 페이지 인덱스 보존 — 사용자가 보던 페이지가
+        # 매 2초마다 1페이지로 튕기지 않도록.
         self._all_inventory = items
-        self._filter_inventory(self.input_search.text())
+        self._filter_inventory(self.input_search.text(), reset_page=False)
 
     def on_inventory_connection_changed(self, connected: bool):
         """[실로봇연동] 서버/DB unreachable 시 'DB 연결 안됨' 배너 + 재고 캐시 초기화."""
