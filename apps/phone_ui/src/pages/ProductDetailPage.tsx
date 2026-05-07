@@ -475,7 +475,7 @@ export default function ProductDetailPage() {
   const TRYON_ROBOT_ID = 'sshopy1';   // 임시 하드코딩
 
   const handleTryOnRequest = async () => {
-    setTryOnMessage('');
+    setTryOnMessage(''); 
     if (!API) {
       setMsg('API_URL 미설정');
       return;

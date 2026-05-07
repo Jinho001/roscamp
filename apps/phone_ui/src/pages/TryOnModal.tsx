@@ -41,7 +41,7 @@ export default function TryOnModal({
         </div>
 
         <div className="tryon-modal-message">
-          선택하신 시착 위치로 이동해 주세요.
+          선택하신 시착 위치로 이동해 주세요. 
         </div>
 
         <div className="tryon-moving-area">
