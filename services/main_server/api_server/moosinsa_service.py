@@ -1336,25 +1336,7 @@ async def ws_amr(ws: WebSocket):
 # amr 도착
 # ══════════════════════════════════════════════════════════════
 @app.post("/amr/arrive")
-async def endpoint_amr_arrive():
-    # """
-    # AMR 도착 이벤트 수신.
-    # 연결된 모든 WebSocket 클라이언트(/ws/amr)에 도착 메시지를 브로드캐스트한다.
-    # """
-    # message = {"type": "AMR_ARRIVE", "result": "ok", "message": "AMR 도착 완료"}
-    # disconnected = []
-    # for client in _ws_clients:
-    #     try:
-    #         await client.send_json(message)
-    #     except Exception:
-    #         disconnected.append(client)
-    # for client in disconnected:
-    #     if client in _ws_clients:
-    #         _ws_clients.remove(client)
-    # return {
-    #     "result": "ok",
-    #     "clients": len(_ws_clients)
-    # }   
+async def endpoint_amr_arrive(): 
     message = {
         "type": "AMR_ARRIVE",
         "result": "ok",
