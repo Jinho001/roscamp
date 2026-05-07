@@ -117,14 +117,16 @@ const RETRIEVAL_STAGE_LABELS = {
 const qToTheta = (oz, ow) => 2 * Math.atan2(oz, ow)
 
 const LOCATIONS = [
-  { key: 'home',      label: '🏠 홈',       x: 0.905, y: -0.006, oz:  0.230, ow: 0.973 },
-  { key: 'frontjet',  label: '📥 입고/회수',  x: 0.615, y:  0.487, oz:  0.730, ow: 0.684 },
-  { key: 'warejet',   label: '📦 창고',      x: 0.015, y:  0.246, oz:  0.003, ow: 1.000 },
+  { key: 'home',      label: '🏠 홈(1)',     x: 0.771, y: -0.008, oz:  0.352, ow: 0.936 },
+  { key: 'home_2',    label: '🏠 홈(2)',     x: 0.823, y:  0.649, oz: -0.466, ow: 0.885 },
+  { key: 'home_3',    label: '🏠 홈(3)',     x: 1.481, y:  0.301, oz:  1.000, ow: 0.000 },
+  { key: 'frontjet',  label: '📥 입고/회수',  x: 0.720, y:  0.477, oz:  0.686, ow: 0.727 },
+  { key: 'warejet',   label: '📦 창고',      x: -0.003, y: 0.160, oz:  0.026, ow: 1.000 },
   { key: 'charging',  label: '🔋 충전',      x: 0.278, y:  0.642, oz: -0.720, ow: 0.694 },
-  { key: 'tryzone_1', label: '👕 시착 1',    x: 1.227, y:  0.105, oz:  0.731, ow: 0.682 },
-  { key: 'tryzone_2', label: '👕 시착 2',    x: 1.547, y:  0.257, oz:  1.000, ow: 0.031 },
-  { key: 'tryzone_3', label: '👕 시착 3',    x: 1.352, y:  0.563, oz: -0.744, ow: 0.668 },
-  { key: 'tryzone_4', label: '👕 시착 4',    x: 1.034, y:  0.384, oz:  0.005, ow: 1.000 },
+  { key: 'tryzone_1', label: '👕 시착 1',    x: 1.047, y:  0.136, oz:  0.708, ow: 0.706 },
+  { key: 'tryzone_2', label: '👕 시착 2',    x: 1.367, y:  0.268, oz:  1.000, ow: 0.002 },
+  { key: 'tryzone_3', label: '👕 시착 3',    x: 1.217, y:  0.550, oz: -0.714, ow: 0.700 },
+  { key: 'tryzone_4', label: '👕 시착 4',    x: 0.881, y:  0.431, oz: -0.020, ow: 1.000 },
 ].map(l => ({ ...l, theta: qToTheta(l.oz, l.ow) }))
 
 const LOC = Object.fromEntries(LOCATIONS.map(l => [l.key, l]))
@@ -1018,6 +1020,150 @@ function MapView({ robots }) {
   )
 }
 
+// ── Schedule Panel (동시 시나리오 테스트) ─────────────────────────────────────
+
+function SchedulePanel({ robots, addLog }) {
+  const [running, setRunning] = useState(false)
+  const [results, setResults] = useState([])
+
+  // 로봇별 시나리오 선택
+  const [s1Robot, setS1Robot] = useState('sshopy1')
+  const [s1Scenario, setS1Scenario] = useState('tryon')
+  const [s2Robot, setS2Robot] = useState('sshopy2')
+  const [s2Scenario, setS2Scenario] = useState('inbound')
+  const [s3Robot, setS3Robot] = useState('sshopy3')
+  const [s3Scenario, setS3Scenario] = useState('retrieval')
+  const [s3Enabled, setS3Enabled] = useState(false)
+
+  const scenarios = [
+    { value: 'tryon', label: '시착' },
+    { value: 'inbound', label: '입고' },
+    { value: 'retrieval', label: '회수' },
+  ]
+
+  async function runScenario(robotId, scenario) {
+    try {
+      let r
+      if (scenario === 'tryon') {
+        r = await fetch(`/tryon/start?robot_id=${robotId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ seat_id: 1, product_id: 'schedule-test', color: null, size: null }),
+        }).then(r => r.json())
+      } else if (scenario === 'inbound') {
+        r = await fetch('/inbound/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            robot_id: robotId,
+            items: [{ product_id: 'NK-AF1', size: 270, color: 'white', quantity: 2 }],
+          }),
+        }).then(r => r.json())
+      } else if (scenario === 'retrieval') {
+        r = await fetch(`/retrieval/start?robot_id=${robotId}`, { method: 'POST' }).then(r => r.json())
+      }
+      return { robotId, scenario, ok: r?.ok ?? false, message: r?.message || 'ok' }
+    } catch (e) {
+      return { robotId, scenario, ok: false, message: String(e) }
+    }
+  }
+
+  async function startAll() {
+    setRunning(true)
+    setResults([])
+    addLog?.('동시 시나리오 테스트 시작', 'info')
+
+    const tasks = [
+      runScenario(s1Robot, s1Scenario),
+      runScenario(s2Robot, s2Scenario),
+    ]
+    if (s3Enabled) {
+      tasks.push(runScenario(s3Robot, s3Scenario))
+    }
+
+    const res = await Promise.all(tasks)
+    setResults(res)
+    setRunning(false)
+
+    res.forEach(r => {
+      addLog?.(
+        `${r.robotId} ${r.scenario}: ${r.ok ? '시작 성공' : '실패 - ' + r.message}`,
+        r.ok ? 'ok' : 'err'
+      )
+    })
+  }
+
+  return (
+    <div style={{ marginBottom: 16, border: '1px solid #e5e7eb', borderRadius: 12, padding: 14, background: '#fefce8' }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: COLORS.orange, textTransform: 'uppercase', letterSpacing: 1 }}>
+          동시 시나리오 테스트
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: COLORS.gray }}>ResourceLock 검증</span>
+      </div>
+
+      {/* 슬롯 1 */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 6, alignItems: 'center' }}>
+        <span style={{ fontSize: 11, color: COLORS.gray, width: 16 }}>1</span>
+        <select value={s1Robot} onChange={e => setS1Robot(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+          {PINKY_ROBOT_IDS.map(id => <option key={id} value={id}>{id}</option>)}
+        </select>
+        <select value={s1Scenario} onChange={e => setS1Scenario(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+          {scenarios.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+      </div>
+
+      {/* 슬롯 2 */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 6, alignItems: 'center' }}>
+        <span style={{ fontSize: 11, color: COLORS.gray, width: 16 }}>2</span>
+        <select value={s2Robot} onChange={e => setS2Robot(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+          {PINKY_ROBOT_IDS.map(id => <option key={id} value={id}>{id}</option>)}
+        </select>
+        <select value={s2Scenario} onChange={e => setS2Scenario(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+          {scenarios.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+      </div>
+
+      {/* 슬롯 3 (옵션) */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 10, alignItems: 'center' }}>
+        <input type="checkbox" checked={s3Enabled} onChange={e => setS3Enabled(e.target.checked)} style={{ width: 16 }} />
+        <select value={s3Robot} onChange={e => setS3Robot(e.target.value)} disabled={!s3Enabled}
+          style={{ ...inputStyle, flex: 1, opacity: s3Enabled ? 1 : 0.4 }}>
+          {PINKY_ROBOT_IDS.map(id => <option key={id} value={id}>{id}</option>)}
+        </select>
+        <select value={s3Scenario} onChange={e => setS3Scenario(e.target.value)} disabled={!s3Enabled}
+          style={{ ...inputStyle, flex: 1, opacity: s3Enabled ? 1 : 0.4 }}>
+          {scenarios.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+      </div>
+
+      <button
+        onClick={startAll}
+        disabled={running}
+        style={{
+          ...btnStyle, width: '100%',
+          background: running ? COLORS.gray : COLORS.orange,
+          fontSize: 14, padding: '10px 0',
+        }}
+      >
+        {running ? '실행 중...' : '동시 실행'}
+      </button>
+
+      {results.length > 0 && (
+        <div style={{ marginTop: 8, fontSize: 11 }}>
+          {results.map((r, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, padding: '2px 0', color: r.ok ? COLORS.green : COLORS.red }}>
+              <span>{r.robotId}</span>
+              <span>{r.scenario}</span>
+              <span style={{ marginLeft: 'auto' }}>{r.ok ? 'OK' : r.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -1072,6 +1218,9 @@ export default function App() {
 
       {/* map */}
       <MapView robots={robots} />
+
+      {/* 동시 시나리오 테스트 */}
+      <SchedulePanel robots={robots} addLog={addLog} />
 
       {/* pinky section */}
       <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 700, color: COLORS.gray, textTransform: 'uppercase', letterSpacing: 1 }}>

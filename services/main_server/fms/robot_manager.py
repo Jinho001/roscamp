@@ -55,17 +55,29 @@ ARRIVAL_COOLDOWN  = 5.0   # 같은 웨이포인트 중복 트리거 방지 (초)
 def _q_to_theta(oz: float, ow: float) -> float:
     return 2.0 * math.atan2(oz, ow)
 
-# 창고 / 회수존 / 홈 (시착 시나리오 공용)
-TRYON_WAREJET   = {"x": 0.015, "y": 0.246, "theta": _q_to_theta( 0.003, 1.000)}
-TRYON_FRONTJET  = {"x": 0.615, "y": 0.487, "theta": _q_to_theta( 0.730, 0.684)}
-TRYON_HOME      = {"x": 0.905, "y": -0.006, "theta": _q_to_theta( 0.230, 0.973)}
+# 창고 / 회수존 (시착 시나리오 공용)
+TRYON_WAREJET   = {"x": -0.003, "y": 0.160, "theta": _q_to_theta( 0.026, 1.000)}
+TRYON_FRONTJET  = {"x":  0.720, "y": 0.477, "theta": _q_to_theta( 0.686, 0.727)}
+
+# 핑키별 홈위치 (sshopy1=1번핑기, sshopy2=2번핑키, sshopy3=3번핑키)
+TRYON_HOMES = {
+    "sshopy1": {"x": 0.771, "y": -0.008, "theta": _q_to_theta( 0.352, 0.936)},
+    "sshopy2": {"x": 0.823, "y":  0.649, "theta": _q_to_theta(-0.466, 0.885)},
+    "sshopy3": {"x": 1.481, "y":  0.301, "theta": _q_to_theta( 1.000, 0.000)},
+}
+
+
+def tryon_home(robot_id: str) -> dict:
+    """robot_id에 해당하는 핑키 홈위치 반환."""
+    return TRYON_HOMES[robot_id]
+
 
 # 시착존 1~4
 TRYZONES = {
-    1: {"x": 1.227, "y": 0.105, "theta": _q_to_theta( 0.731, 0.682)},
-    2: {"x": 1.547, "y": 0.257, "theta": _q_to_theta( 1.000, 0.031)},
-    3: {"x": 1.352, "y": 0.563, "theta": _q_to_theta(-0.744, 0.668)},
-    4: {"x": 1.034, "y": 0.384, "theta": _q_to_theta( 0.005, 1.000)},
+    1: {"x": 1.047, "y": 0.136, "theta": _q_to_theta( 0.708, 0.706)},
+    2: {"x": 1.367, "y": 0.268, "theta": _q_to_theta( 1.000, 0.002)},
+    3: {"x": 1.217, "y": 0.550, "theta": _q_to_theta(-0.714, 0.700)},
+    4: {"x": 0.881, "y": 0.431, "theta": _q_to_theta(-0.020, 1.000)},
 }
 
 # 시착 시나리오 stage
@@ -83,7 +95,7 @@ TRYON_STAGE_AT_WAREJET   = 15  # 창고 도착 — ware_jet 동작 중 (sshopy �
 RETRIEVAL_WAYPOINTS = {
     "entrance_counter": TRYON_FRONTJET,  # 입구 카운터 (FrontJet 앞)
     "warehouse":        TRYON_WAREJET,   # 창고 (WareJet 앞)
-    "home":             TRYON_HOME,      # 홈/충전소
+    # "home"은 robot_id별로 다르므로 tryon_home(robot_id)를 사용한다.
 }
 
 RETRIEVAL_STAGE_TO_ENTRANCE   = 20  # SShopy → 입구 카운터 이동          [4-05]
@@ -112,7 +124,7 @@ RETRIEVAL_TIMEOUT = 300   # 각 단계별 timeout (초) [TC 4-20]
 INBOUND_WAYPOINTS = {
     "frontjet":  TRYON_FRONTJET,  # 입고 위치 (FrontJet 앞)
     "warehouse": TRYON_WAREJET,   # 창고 (WareJet 앞)
-    "home":      TRYON_HOME,      # 홈/충전소
+    # "home"은 robot_id별로 다르므로 tryon_home(robot_id)를 사용한다.
 }
 
 INBOUND_STAGE_TO_FRONTJET    = 30  # SShopy → 입고 위치(FrontJet 앞) 이동 [1-04]
@@ -288,7 +300,8 @@ class _RobotState:
 class RobotManager:
 
     def __init__(self):
-        self._clients:    dict[str, roslibpy.Ros]               = {}
+        self._client:     roslibpy.Ros | None                   = None  # 단일 rosbridge 연결
+        self._clients:    dict[str, roslibpy.Ros]               = {}    # 하위 호환 (로봇별 같은 client 참조)
         self._publishers: dict[str, dict[str, roslibpy.Topic]]  = {}
         self._states:     dict[str, _RobotState] = {
             rid: _RobotState(rid, cfg) for rid, cfg in ROBOTS.items()
@@ -346,20 +359,26 @@ class RobotManager:
             print("[fleet] STUB 모드 — 모든 pinky 로봇 연결 완료 (가상)")
             return
 
-        items = list(ROBOTS.items())
-        if not items:
-            return
-        # First robot starts the reactor
-        self._connect_one(*items[0])
-        # Remaining robots connect in parallel (reactor already running)
-        threads = [
-            threading.Thread(target=self._connect_one, args=(rid, cfg), daemon=True)
-            for rid, cfg in items[1:]
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=CONNECT_TIMEOUT + 2)
+        # 단일 rosbridge(domain 99, port 9090)에 연결
+        from fms.config import ROSBRIDGE_HOST, ROSBRIDGE_PORT
+        try:
+            self._client = roslibpy.Ros(host=ROSBRIDGE_HOST, port=ROSBRIDGE_PORT)
+            self._client.run(timeout=CONNECT_TIMEOUT)
+            self._client.on("close", lambda *_: self._on_bridge_lost())
+            print(f"[fleet] rosbridge 연결 완료 → ws://{ROSBRIDGE_HOST}:{ROSBRIDGE_PORT}")
+
+            # 모든 로봇을 같은 client로 등록 + 구독
+            for robot_id, cfg in ROBOTS.items():
+                self._clients[robot_id] = self._client
+                self._publishers[robot_id] = {}
+                self._states[robot_id].connected = True
+                self._subscribe(robot_id, cfg, self._client)
+                print(f"[fleet] {robot_id} ✓ subscribed (/{cfg.get('namespace', robot_id)}/*)")
+
+        except Exception as e:
+            print(f"[fleet] rosbridge 연결 실패: {e}")
+            for state in self._states.values():
+                state.connected = False
 
     def start_reconnect_loop(self):
         """
@@ -394,65 +413,36 @@ class RobotManager:
 
     def close_all(self):
         self._running = False
-        for client in list(self._clients.values()):
+        if self._client:
             try:
-                client.close()
+                self._client.terminate()
             except Exception:
                 pass
+
+    def _on_bridge_lost(self):
+        """rosbridge 연결 끊김 → 모든 로봇 offline 처리."""
+        print("[fleet] rosbridge 연결 끊김 — 모든 로봇 offline")
+        with self._lock:
+            self._clients.clear()
+            self._publishers.clear()
+        for state in self._states.values():
+            state.connected = False
+            state.reset_live_data()
+        self._client = None
 
     # ── reconnect loop ────────────────────────────────────────────────────────
 
     def _reconnect_loop(self):
         while self._running:
             time.sleep(RECONNECT_INTERVAL)
-            for robot_id, cfg in ROBOTS.items():
-                if not self._running:
-                    break
-                client = self._clients.get(robot_id)
-                # detect silent drop (connection object exists but is no longer alive)
-                if client is not None and not client.is_connected:
-                    print(f"[fleet] {robot_id} — connection lost, clearing")
-                    self._mark_offline(robot_id)
-                # reconnect if offline
-                if not self._states[robot_id].connected:
-                    threading.Thread(
-                        target=self._connect_one, args=(robot_id, cfg), daemon=True
-                    ).start()
-            # [Scene 1] 입고 task timeout 감시 — 각 단계가 INBOUND_TIMEOUT 초를 초과하면 강제 종료
+            # rosbridge 연결 확인 + 재연결
+            if self._client is None or not self._client.is_connected:
+                print("[fleet] rosbridge 재연결 시도...")
+                self.connect_all()
             self._check_inbound_timeouts()
-            # [Scene 4] 회수 task timeout 감시 — 각 단계가 RETRIEVAL_TIMEOUT 초를 초과하면 강제 종료
             self._check_retrieval_timeouts()
 
     # ── connect + subscribe ───────────────────────────────────────────────────
-
-    def _connect_one(self, robot_id: str, cfg: dict):
-        try:
-            client = roslibpy.Ros(host=cfg["host"], port=cfg["port"])
-            client.run(timeout=CONNECT_TIMEOUT)
-
-            client.on("close", lambda *_, rid=robot_id: self._mark_offline(rid))
-
-            with self._lock:
-                old = self._clients.pop(robot_id, None)
-                if old:
-                    try:
-                        old.close()
-                    except Exception:
-                        pass
-                self._clients[robot_id]    = client
-                self._publishers[robot_id] = {}
-                self._states[robot_id].connected = True
-
-            print(f"[fleet] {robot_id} ✓ connected → ws://{cfg['host']}:{cfg['port']}")
-            self._subscribe(robot_id, cfg, client)
-
-        except Exception as e:
-            self._states[robot_id].connected = False
-            print(f"[fleet] {robot_id} offline — {e}")
-            try:
-                client.close()
-            except Exception:
-                pass
 
     def _mark_offline(self, robot_id: str):
         with self._lock:
@@ -464,24 +454,23 @@ class RobotManager:
 
     def _subscribe(self, robot_id: str, cfg: dict, client: roslibpy.Ros):
         state = self._states[robot_id]
+        ns = cfg.get("namespace", robot_id)
         if cfg["type"] == "pinky":
-            self._sub(client, "/battery/percent",
+            self._sub(client, f"/{ns}/battery/percent",
                       "std_msgs/Float32",
                       lambda m, s=state: setattr(s, "battery", m.get("data")))
-            # _update_pose_and_check: pose 갱신 + 배달 도착 감지 (거리 기반)
-            self._sub(client, "/amcl_pose",
+            self._sub(client, f"/{ns}/amcl_pose",
                       "geometry_msgs/PoseWithCovarianceStamped",
                       lambda m, s=state: self._update_pose_and_check(s, m))
-            # 시나리오2(시착)용 — nav2 NavigateToPose SUCCEEDED 신호 (도착 정밀 판정)
-            self._sub(client, "/navigate_to_pose/_action/status",
+            self._sub(client, f"/{ns}/navigate_to_pose/_action/status",
                       "action_msgs/GoalStatusArray",
                       lambda m, s=state: self._on_nav_status(s, m))
         elif cfg["type"] == "jetcobot":
-            joint_topic = cfg.get("joint_topic", "/joint_states")
+            joint_topic = cfg.get("joint_topic", f"/{ns}/joint_states")
             self._sub(client, joint_topic,
                       "sensor_msgs/JointState",
                       lambda m, s=state: self._update_joints(s, m))
-            self._sub(client, "/work_complete",
+            self._sub(client, f"/{ns}/work_complete",
                       "std_msgs/String",
                       lambda m, s=state: self._on_work_complete(s, m))
 
@@ -657,7 +646,7 @@ class RobotManager:
         if s == TRYON_STAGE_TO_FRONTJET:
             return TRYON_FRONTJET
         if s == TRYON_STAGE_TO_HOME:
-            return TRYON_HOME
+            return tryon_home(state.robot_id)
         return None  # AT_TRYZONE / AT_WAREJET: 대기 상태, 도착 판정 X
 
     def _on_tryon_arrived(self, state: _RobotState):
@@ -673,7 +662,7 @@ class RobotManager:
             print(f"[fleet] {robot_id} (시착) 창고 도착 → ware_jet 그리퍼 동작 시작 (sshopy 대기)")
 
             def _run_warejet_then_advance():
-                ok = self._ssh_exec("ware_jet", self._GRIPPER_SCRIPT)
+                ok = self._ssh_exec("ware_jet", self._SCRIPTS["tryon_pick"])
                 print(f"[fleet] {robot_id} (시착) ware_jet 완료 (ok={ok})")
                 # sshopy 시착존으로 출발
                 if state.tryon_stage == TRYON_STAGE_AT_WAREJET:  # 중간 cancel 체크
@@ -704,7 +693,7 @@ class RobotManager:
                 daemon=True,
             ).start()
             state.tryon_stage = TRYON_STAGE_TO_HOME
-            wp = TRYON_HOME
+            wp = tryon_home(robot_id)
             self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
             print(f"[fleet] {robot_id} (시착) → 홈 복귀")
 
@@ -862,7 +851,7 @@ class RobotManager:
 
         # 홈/대기위치로 직접 복귀
         state.tryon_stage = TRYON_STAGE_TO_HOME
-        wp = TRYON_HOME
+        wp = tryon_home(robot_id)
         ok = self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
         print(f"[fleet] {robot_id} 수령 완료 → 홈/대기위치 복귀 (seat {seat_id} 해제)")
         return ok, "ok"
@@ -1082,7 +1071,7 @@ class RobotManager:
         if s == INBOUND_STAGE_TO_WAREHOUSE:
             return INBOUND_WAYPOINTS["warehouse"]
         if s == INBOUND_STAGE_TO_HOME:
-            return INBOUND_WAYPOINTS["home"]
+            return tryon_home(state.robot_id)
         return None  # FRONTJET_LOAD / SCAN_WAIT / WAREJET_STORE: 도착 판정 불필요
 
     def _on_inbound_arrived(self, state: _RobotState):
@@ -1130,7 +1119,7 @@ class RobotManager:
         출력: 없음 (SSH 실패 시에도 다음 단계로 진행, 재시도 로직 TODO)
         """
         print(f"[fleet] (입고) {task.task_id} FrontJet 상차 작업 중 (박스 2개)...")
-        ok = self._ssh_exec("front_jet", self._FRONT_JET_SCRIPT)
+        ok = self._ssh_exec("front_jet", self._SCRIPTS["inbound_load"])
         print(f"[fleet] (입고) {task.task_id} FrontJet 상차 {'완료' if ok else '실패(계속)'}")
 
         # [1-07] 상차 완료 → SShopy 창고로 이동
@@ -1151,12 +1140,12 @@ class RobotManager:
         """
         warehouse_pos = task.scan_result.get("warehouse_pos", "")
         print(f"[fleet] (입고) {task.task_id} WareJet 적재 작업 중... (위치={warehouse_pos})")
-        ok = self._ssh_exec("ware_jet", self._GRIPPER_SCRIPT)
+        ok = self._ssh_exec("ware_jet", self._SCRIPTS["warehouse_store"])
         print(f"[fleet] (입고) {task.task_id} WareJet 적재 {'완료' if ok else '실패(계속)'}")
 
         # [1-15] 적재 완료 → SShopy 홈 복귀
         self._advance_inbound_stage(task, INBOUND_STAGE_TO_HOME)
-        wp = INBOUND_WAYPOINTS["home"]
+        wp = tryon_home(task.robot_id)
         self.goal_pose(task.robot_id, wp["x"], wp["y"], wp["theta"])
         print(f"[fleet] (입고) {task.task_id} → 홈 복귀 ({wp['x']}, {wp['y']})")
 
@@ -1362,7 +1351,7 @@ class RobotManager:
 
         # [4-17] 홈 복귀
         self._advance_retrieval_stage(task, RETRIEVAL_STAGE_TO_HOME)
-        wp = RETRIEVAL_WAYPOINTS["home"]
+        wp = tryon_home(task.robot_id)
         self.goal_pose(task.robot_id, wp["x"], wp["y"], wp["theta"])
         print(f"[fleet] (회수) {task_id} DB 복구 완료 → 홈 복귀")
         return True, "ok"
@@ -1429,7 +1418,7 @@ class RobotManager:
         if s == RETRIEVAL_STAGE_TO_WAREHOUSE:
             return RETRIEVAL_WAYPOINTS["warehouse"]
         if s == RETRIEVAL_STAGE_TO_HOME:
-            return RETRIEVAL_WAYPOINTS["home"]
+            return tryon_home(state.robot_id)
         return None  # FRONTJET_LOAD / IDENTIFY / WAREJET_STORE / DB_RESTORE: 도착 판정 불필요
 
     def _on_retrieval_arrived(self, state: _RobotState):
@@ -1479,7 +1468,7 @@ class RobotManager:
         출력: 없음 (SSH 실패 시에도 IDENTIFY 단계로 진행, 재시도 로직 TODO)
         """
         print(f"[fleet] (회수) {task.task_id} FrontJet 상차 작업 중...")
-        ok = self._ssh_exec("front_jet", self._FRONT_JET_SCRIPT)
+        ok = self._ssh_exec("front_jet", self._SCRIPTS["retrieval_load"])
         print(f"[fleet] (회수) {task.task_id} FrontJet 상차 {'완료' if ok else '실패(계속)'}")
         # [4-09] 상품 식별 대기 단계로 전환 — identify_product() 호출 대기
         self._advance_retrieval_stage(task, RETRIEVAL_STAGE_IDENTIFY)
@@ -1496,7 +1485,7 @@ class RobotManager:
         출력: 없음 (SSH 실패 시에도 DB_RESTORE 단계로 진행, 재시도 로직 TODO)
         """
         print(f"[fleet] (회수) {task.task_id} WareJet 적재 작업 중...")
-        ok = self._ssh_exec("ware_jet", self._GRIPPER_SCRIPT)
+        ok = self._ssh_exec("ware_jet", self._SCRIPTS["warehouse_store"])
         print(f"[fleet] (회수) {task.task_id} WareJet 적재 {'완료' if ok else '실패(계속)'}")
         # [4-15~4-16] DB 복구 대기 단계로 전환 — notify_db_restored() 호출 대기
         self._advance_retrieval_stage(task, RETRIEVAL_STAGE_DB_RESTORE)
@@ -1606,7 +1595,8 @@ class RobotManager:
         client = self._clients.get(robot_id)
         if not client or not client.is_connected:
             return False
-        pub = self._get_pub(robot_id, "/cmd_vel", "geometry_msgs/Twist", client)
+        ns = ROBOTS[robot_id].get("namespace", robot_id)
+        pub = self._get_pub(robot_id, f"/{ns}/cmd_vel", "geometry_msgs/Twist", client)
         pub.publish(roslibpy.Message({
             "linear":  {"x": linear_x, "y": 0.0, "z": 0.0},
             "angular": {"x": 0.0,      "y": 0.0, "z": angular_z},
@@ -1647,7 +1637,8 @@ class RobotManager:
             return False
         qz = math.sin(theta / 2.0)
         qw = math.cos(theta / 2.0)
-        pub = self._get_pub(robot_id, "/goal_pose", "geometry_msgs/PoseStamped", client)
+        ns = ROBOTS[robot_id].get("namespace", robot_id)
+        pub = self._get_pub(robot_id, f"/{ns}/goal_pose", "geometry_msgs/PoseStamped", client)
         pub.publish(roslibpy.Message({
             "header": {"frame_id": "map"},
             "pose": {
@@ -1658,7 +1649,7 @@ class RobotManager:
         # 시나리오2 도착 판정 리셋 — 다음 SUCCEEDED 만 인정
         state._goal_sent_time   = time.time()
         state._nav_succeeded_at = 0.0
-        print(f"[fleet] {robot_id} → goal_pose x={x} y={y} theta={theta:.2f}")
+        print(f"[fleet] {robot_id} → /{ns}/goal_pose x={x} y={y} theta={theta:.2f}")
         return True
 
     def trigger_work(self, robot_id: str, sshopy_id: str) -> bool:
@@ -1668,88 +1659,32 @@ class RobotManager:
             return False
         if not state or state.type != "jetcobot":
             return False
-        pub = self._get_pub(robot_id, "/trigger_work", "std_msgs/String", client)
+        ns = ROBOTS[robot_id].get("namespace", robot_id)
+        pub = self._get_pub(robot_id, f"/{ns}/trigger_work", "std_msgs/String", client)
         pub.publish(roslibpy.Message({"data": sshopy_id}))
         state.busy = True
         return True
 
-    _ARM_RESET_SCRIPT = """python3 - <<'PYEOF'
-from pymycobot.mycobot import MyCobot
-import time
-mc = MyCobot('/dev/ttyJETCOBOT', 1000000)
-mc.thread_lock = True
-mc.send_angles([0, 0, 0, 0, 0, 0], 30)
-time.sleep(2)
-print('arm_reset done')
-PYEOF"""
+    # ── Jetcobot 스크립트 경로 (각 jetcobot의 ~/scripts/ 에 배치됨) ──
+    _ARM_RESET_SCRIPT = "python3 ~/scripts/reset.py"
 
-    # 왔다갔다(±45°) → 그리퍼 열기(100)  — ware_jet 기본 동작
-    _GRIPPER_SCRIPT = """python3 - <<'PYEOF'
-from pymycobot.mycobot import MyCobot
-import time
-mc = MyCobot('/dev/ttyJETCOBOT', 1000000)
-mc.thread_lock = True
-time.sleep(2.5)
-mc.send_angles([45, 0, 0, 0, 0, 0], 40)
-time.sleep(2.5)
-mc.send_angles([-45, 0, 0, 0, 0, 0], 40)
-time.sleep(2.5)
-mc.send_angles([0, 0, 0, 0, 0, 0], 40)
-time.sleep(1.5)
-mc.set_gripper_value(100, 30)
-time.sleep(2)
-print('done')
-PYEOF"""
+    # 시나리오별 스크립트 매핑
+    _SCRIPTS = {
+        # 시착: 선반 → sshopy
+        "tryon_pick":       "python3 ~/scripts/pick_from_shelf.py",
+        # 입고: 입고박스 → sshopy (front_jet)
+        "inbound_load":     "python3 ~/scripts/pick_from_inbound.py",
+        # 입고/회수: sshopy → 선반 (ware_jet)
+        "warehouse_store":  "python3 ~/scripts/place_to_shelf.py",
+        # 회수: 카운터 → sshopy (front_jet)
+        "retrieval_load":   "python3 ~/scripts/pick_from_counter.py",
+        # 초기화
+        "reset":            "python3 ~/scripts/reset.py",
+    }
 
-    # front_jet 전용: 매장 적재/하차 시퀀스 (4 사이클 pick & place)
-    _FRONT_JET_SCRIPT = """python3 - <<'PYEOF'
-from pymycobot.mycobot import MyCobot
-import time
-mc = MyCobot('/dev/ttyJETCOBOT', 1000000)
-mc.thread_lock = True
-mc.send_angles([0,0,0,0,0,0],30)
-time.sleep(2)
-mc.send_coords([167.8, -75, 150.5, -178.84, 8, -179.93], 30, 0)
-time.sleep(2)
-mc.send_coords([167.8, -75, 110.5, -178.84, 8, -179.93], 30, 0)
-time.sleep(2)
-mc.set_gripper_value(0, 50)
-time.sleep(1)
-mc.send_coords([167.8, -75, 150.5, -178.84, 8, -179.93], 30, 0)
-time.sleep(2)
-mc.send_angles([0,0,0,0,0,0],30)
-time.sleep(2)
-mc.send_coords([-42, -135.5, 270.3, -177.46, 0.27, -179.82], 30, 0)
-time.sleep(2)
-mc.send_coords([-42, -135.5, 245.3, -177.46, 0.27, -179.82], 30, 0)
-time.sleep(2)
-mc.set_gripper_value(100, 50)
-time.sleep(1)
-mc.send_coords([-42, -135.5, 270.3, -177.46, 0.27, -179.82], 30, 0)
-time.sleep(2)
-mc.send_angles([0,0,0,0,0,0],30)
-time.sleep(2)
-mc.send_coords([167.8, -100, 150.5, -178.84, 8, -179.93], 30, 0)
-time.sleep(2)
-mc.send_coords([167.8, -100, 110.5, -178.84, 8, -179.93], 30, 0)
-time.sleep(2)
-mc.set_gripper_value(0, 50)
-time.sleep(1)
-mc.send_coords([167.8, -100, 150.5, -178.84, 8, -179.93], 30, 0)
-time.sleep(2)
-mc.send_angles([0,0,0,0,0,0],30)
-time.sleep(2)
-mc.send_coords([-42, -170.5, 270.3, -177.46, 0.27, -179.82], 30, 0)
-time.sleep(2)
-mc.send_coords([-42, -170.5, 245.3, -177.46, 0.27, -179.82], 30, 0)
-time.sleep(2)
-mc.set_gripper_value(100, 50)
-time.sleep(1)
-mc.send_coords([-42, -170.5, 270.3, -177.46, 0.27, -179.82], 30, 0)
-time.sleep(2)
-mc.send_angles([0,0,0,0,0,0],30)
-print('done')
-PYEOF"""
+    # 하위 호환: 기존 코드에서 참조하는 스크립트 변수
+    _GRIPPER_SCRIPT = _SCRIPTS["tryon_pick"]
+    _FRONT_JET_SCRIPT = _SCRIPTS["inbound_load"]
 
     def _gripper_script_for(self, robot_id: str) -> str:
         return self._FRONT_JET_SCRIPT if robot_id == "front_jet" else self._GRIPPER_SCRIPT

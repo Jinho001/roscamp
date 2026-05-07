@@ -2,55 +2,62 @@
 """
 Robot fleet configuration.
 
-rosbridge topology:
-  sshopy1  → Pinky itself (192.168.1.111:9090, domain 11)
-  sshopy2  → Main PC     (localhost:9092, domain 12)
-  sshopy3  → Main PC     (localhost:9093, domain 13)
-  front_jet → Main PC    (localhost:9094, domain 14)
-  ware_jet  → Main PC    (localhost:9095, domain 15)
+domain_bridge topology:
+  서버 (domain 99, rosbridge port 9090)
+  sshopy1  → domain 11, namespace "sshopy1"
+  sshopy2  → domain 12, namespace "sshopy2"
+  sshopy3  → domain 13, namespace "sshopy3"
+  front_jet → domain 14, namespace "front_jet"
+  ware_jet  → domain 15, namespace "ware_jet"
 
-Main PC runs each rosbridge instance with RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-so DDS multicast discovers the robot nodes on the same LAN.
+domain_bridge가 각 로봇 도메인의 토픽을 서버 도메인(99)으로 브릿지.
+FMS는 단일 rosbridge(localhost:9090, domain 99)에 연결하여
+/{namespace}/topic 형태로 모든 로봇 토픽을 구독/발행한다.
 """
 
-# [전체주석] 로봇 ID → 접속 정보 매핑 dict.
-#            RobotManager가 이 설정으로 rosbridge WebSocket 연결 및 SSH 접속을 수행한다.
+# [전체주석] 서버 도메인 및 rosbridge 설정
+SERVER_DOMAIN_ID = 99
+ROSBRIDGE_HOST = "localhost"
+ROSBRIDGE_PORT = 9090
+
+# [전체주석] 로봇 ID → 설정 매핑 dict.
+#            namespace: domain 99에서의 토픽 접두사 (domain_bridge가 remap)
 ROBOTS: dict[str, dict] = {
-    "sshopy1": {          # [전체주석] 이동 로봇 1호 (Pinky Pro)
-        "host": "localhost",   # [전체주석] rosbridge WebSocket 호스트 (메인 PC 로컬)
-        "port": 9091,          # [전체주석] rosbridge WebSocket 포트 번호
-        "type": "pinky",       # [전체주석] 로봇 종류: pinky = 이동 로봇 (nav2 사용)
-        "domain_id": 11,       # [전체주석] ROS2 DDS 도메인 ID (로봇 간 통신 격리)
+    "sshopy1": {
+        "host": ROSBRIDGE_HOST, "port": ROSBRIDGE_PORT,
+        "type": "pinky",
+        "domain_id": 11,
+        "namespace": "sshopy1",
     },
-    "sshopy2": {          # [전체주석] 이동 로봇 2호 (Pinky Pro) — 시착/입고/회수 기본 로봇
-        "host": "localhost",
-        "port": 9092,
+    "sshopy2": {
+        "host": ROSBRIDGE_HOST, "port": ROSBRIDGE_PORT,
         "type": "pinky",
         "domain_id": 12,
+        "namespace": "sshopy2",
     },
-    "sshopy3": {          # [전체주석] 이동 로봇 3호 (예비 로봇)
-        "host": "localhost",
-        "port": 9093,
+    "sshopy3": {
+        "host": ROSBRIDGE_HOST, "port": ROSBRIDGE_PORT,
         "type": "pinky",
         "domain_id": 13,
+        "namespace": "sshopy3",
     },
-    "front_jet": {        # [전체주석] 입구 카운터/매장 쪽 로봇 팔 (Jetcobot) — FrontJet
-        "host": "localhost",
-        "port": 9094,          # [전체주석] FrontJet의 rosbridge WebSocket 포트
-        "type": "jetcobot",    # [전체주석] 로봇 종류: jetcobot = 고정형 로봇 팔 (MyCobot)
+    "front_jet": {
+        "host": ROSBRIDGE_HOST, "port": ROSBRIDGE_PORT,
+        "type": "jetcobot",
         "domain_id": 14,
-        "joint_topic": "/frontjet/joint_states",   # [전체주석] 관절 각도 구독 토픽
-        "ssh_host": "192.168.1.114",               # [전체주석] FrontJet 실제 IP (팔 제어 SSH)
-        "ssh_user": "jetcobot",                    # [전체주석] SSH 접속 계정
-        "ssh_pass": "1",                           # [전체주석] SSH 접속 비밀번호
+        "namespace": "front_jet",
+        "joint_topic": "/front_jet/joint_states",
+        "ssh_host": "192.168.1.114",
+        "ssh_user": "jetcobot",
+        "ssh_pass": "1",
     },
-    "ware_jet": {         # [전체주석] 창고 쪽 로봇 팔 (Jetcobot) — WareJet
-        "host": "localhost",
-        "port": 9095,
+    "ware_jet": {
+        "host": ROSBRIDGE_HOST, "port": ROSBRIDGE_PORT,
         "type": "jetcobot",
         "domain_id": 15,
-        "joint_topic": "/warejet/joint_states",    # [전체주석] 관절 각도 구독 토픽
-        "ssh_host": "192.168.1.115",               # [전체주석] WareJet 실제 IP
+        "namespace": "ware_jet",
+        "joint_topic": "/ware_jet/joint_states",
+        "ssh_host": "192.168.1.115",
         "ssh_user": "jetcobot",
         "ssh_pass": "1",
     },
