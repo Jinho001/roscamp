@@ -9,6 +9,7 @@ type TryOnModalProps = {
   size?: number | null;
   color?: string | null;
   loading?: boolean;
+  message?: string;
 };
 
 export default function TryOnModal({
@@ -20,6 +21,7 @@ export default function TryOnModal({
   size,
   color,
   loading = false,
+  message,
 }: TryOnModalProps) {
   if (!open) return null;
 
@@ -39,9 +41,9 @@ export default function TryOnModal({
         </div>
 
         <div className="tryon-modal-message">
-          {loading
+          {message || (loading
             ? '쇼피에게 요청을 전달하고 있어요.'
-            : '쇼피가 고객님께서 요청하신 신발을 찾으러 가고 있어요.'}
+            : '쇼피가 고객님께서 요청하신 신발을 찾으러 가고 있어요.')}
         </div>
 
         <div className="tryon-moving-area">

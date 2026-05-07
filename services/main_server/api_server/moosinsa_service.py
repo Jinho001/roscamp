@@ -1246,21 +1246,46 @@ async def endpoint_pickup_complete(robot_id: str = "sshopy2"):
     logger.info(f"[pickup/complete] 수령 완료 → robot={robot_id}")
     return {"success": True, "robot_id": robot_id}
 
+# @app.post("/tryon/cancel")
+# async def endpoint_tryon_cancel(robot_id: str = "sshopy2"):
+#     """
+#     시착 취소 엔드포인트 (TC 2-20).
+#     시착 진행 중인 로봇의 작업을 즉시 취소하고 홈으로 복귀 트리거.
+
+#     ■ KIOSK 사용 — kiosk_tryon_arrive.py TryonArrivePage._cancel() 에서 호출.
+#       '취소' 버튼 클릭 시 호출.
+#       성공 시 키오스크는 kiosk_tryon_another 화면으로 전환한다.
+#     """
+#     ok, msg = fleet.cancel_tryon(robot_id)
+#     if not ok:
+#         raise HTTPException(status_code=409, detail=msg)
+#     logger.info(f"[tryon/cancel] 시착 취소 → robot={robot_id}")
+#     return {"success": True, "robot_id": robot_id}
+
 @app.post("/tryon/cancel")
 async def endpoint_tryon_cancel(robot_id: str = "sshopy2"):
-    """
-    시착 취소 엔드포인트 (TC 2-20).
-    시착 진행 중인 로봇의 작업을 즉시 취소하고 홈으로 복귀 트리거.
+    try:
+        logger.info(f"[tryon/cancel] 요청 수신 → robot={robot_id}")
 
-    ■ KIOSK 사용 — kiosk_tryon_arrive.py TryonArrivePage._cancel() 에서 호출.
-      '취소' 버튼 클릭 시 호출.
-      성공 시 키오스크는 kiosk_tryon_another 화면으로 전환한다.
-    """
-    ok, msg = fleet.cancel_tryon(robot_id)
-    if not ok:
-        raise HTTPException(status_code=409, detail=msg)
-    logger.info(f"[tryon/cancel] 시착 취소 → robot={robot_id}")
-    return {"success": True, "robot_id": robot_id}
+        ok, msg = fleet.cancel_tryon(robot_id)
+
+        if not ok:
+            raise HTTPException(status_code=409, detail=msg)
+
+        logger.info(f"[tryon/cancel] 시착 취소 → robot={robot_id}")
+
+        return {
+            "success": True,
+            "robot_id": robot_id,
+            "message": "시착 요청 취소 완료",
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.exception(f"[tryon/cancel] 처리 중 예외 발생 robot={robot_id}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ─────────────────────────────────────────────────────────────────────────
 # /ws/amr — phone_ui 가 구독, 시착 시나리오 도착 이벤트 push
@@ -1355,6 +1380,41 @@ async def endpoint_amr_arrive():
         "clients": len(_ws_clients)
     }
 
+class DeliveryStatusRequest(BaseModel):
+    robot_id: str
+    type: str = "AMR_DELIVERY_STATUS"
+    status: str
+
+@app.post("/amr/delivery_status")
+async def endpoint_amr_delivery_status(req: DeliveryStatusRequest):
+    message = {
+        "type": req.type,
+        "result": "ok",
+        "data": {
+            "robot_id": req.robot_id,
+            "status": req.status,
+            "message": req.status,
+        },
+    }
+
+    disconnected = []
+
+    for client in _ws_clients[:]:
+        try:
+            await client.send_json(message)
+            print("AMR message sent")
+        except Exception as e:
+            print("AMR send error:", e)
+            disconnected.append(client)
+
+    for client in disconnected:
+        if client in _ws_clients:
+            _ws_clients.remove(client)
+
+    return {
+        "result": "ok",
+        "clients": len(_ws_clients)
+    }
 
 # ══════════════════════════════════════════════════════════════
 # [8] PySide6 키오스크 ↔ Moosinsa Service          ★ NEW ★

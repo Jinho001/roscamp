@@ -739,6 +739,7 @@ export default function ProductDetailPage() {
         size={selectedSize}
         color={selectedColor}
         onCancel={() => handleCancelTryOn()}
+        message={tryOnMessage}
         // seat={seat}
       />
 
