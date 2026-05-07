@@ -1295,25 +1295,7 @@ async def ws_amr(ws: WebSocket):
 # amr 도착
 # ══════════════════════════════════════════════════════════════
 @app.post("/amr/arrive")
-async def endpoint_amr_arrive():
-    # """
-    # AMR 도착 이벤트 수신.
-    # 연결된 모든 WebSocket 클라이언트(/ws/amr)에 도착 메시지를 브로드캐스트한다.
-    # """
-    # message = {"type": "AMR_ARRIVE", "result": "ok", "message": "AMR 도착 완료"}
-    # disconnected = []
-    # for client in _ws_clients:
-    #     try:
-    #         await client.send_json(message)
-    #     except Exception:
-    #         disconnected.append(client)
-    # for client in disconnected:
-    #     if client in _ws_clients:
-    #         _ws_clients.remove(client)
-    # return {
-    #     "result": "ok",
-    #     "clients": len(_ws_clients)
-    # }   
+async def endpoint_amr_arrive(): 
     message = {
         "type": "AMR_ARRIVE",
         "result": "ok",
@@ -1339,6 +1321,45 @@ async def endpoint_amr_arrive():
         "clients": len(_ws_clients)
     }
 
+class DeliveryStatusRequest(BaseModel):
+    robot_id: str
+    status: str
+
+@app.post("/amr/delivery_status")
+async def endpoint_amr_delivery_status(req: DeliveryStatusRequest):
+    # """
+    # AMR 배송 상태 업데이트 수신.
+    # status: "en_route", "arrived", "pickup_complete" 등
+    # 연결된 모든 WebSocket 클라이언트(/ws/amr)에 상태 메시지를 브로드캐스트한다.
+    # """
+
+    logger.info(
+        f"[delivery_status] robot_id={req.robot_id}, status={req.status}"
+    )
+    message = {
+        "type": "AMR_DELIVERY_STATUS",
+        "status": req.status,
+        "message": f"{req.status}"
+    }
+
+    disconnected = []
+
+    for client in _ws_clients[:]:
+        try:
+            await client.send_json(message)
+            print("AMR delivery status sent:", req.status)
+        except Exception as e:
+            print("AMR delivery status send error:", e)
+            disconnected.append(client)
+
+    for client in disconnected:
+        if client in _ws_clients:
+            _ws_clients.remove(client)
+
+    return {
+        "result": "ok",
+        "clients": len(_ws_clients)
+    }
 
 # ══════════════════════════════════════════════════════════════
 # [8] PySide6 키오스크 ↔ Moosinsa Service          ★ NEW ★
