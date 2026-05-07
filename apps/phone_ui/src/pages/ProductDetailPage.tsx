@@ -80,7 +80,7 @@ export default function ProductDetailPage() {
   // 시착 요청
   const [tryOnPopupOpen, setTryOnPopupOpen] = useState(false);
   const [tryOnLoading, setTryOnLoading] = useState(false);
-
+  const [tryOnMessage, setTryOnMessage] = useState('');
   const [failModalOpen, setFailModalOpen] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -111,6 +111,9 @@ export default function ProductDetailPage() {
         if (data.type === 'AMR_ARRIVE') {
           setTryOnPopupOpen(false);
           setIsArriveOpen(true);
+        }else if (data.type === 'AMR_DELIVERY_STATUS') {
+          setTryOnPopupOpen(true);
+          setTryOnMessage(data.data.message);
         }
       };
 
@@ -469,7 +472,7 @@ export default function ProductDetailPage() {
    *   - 도착 감지: WS {API}/ws/amr → AMR_ARRIVE → ArrivalModal 자동 표시
    *   - 수령 완료: ArrivalModal onClose에서 POST {API}/pickup/complete
    * ============================================================ */
-  const TRYON_ROBOT_ID = 'sshopy1';   // 임시 하드코딩
+  const TRYON_ROBOT_ID = 'sshopy2';   // 임시 하드코딩
 
   const handleTryOnRequest = async () => {
     if (!API) {
@@ -500,9 +503,32 @@ export default function ProductDetailPage() {
       setMsg(
         `시착 요청 완료: ${product?.model} / ${selectedSize ?? '-'} / ${selectedColor ?? '-'} / 좌석 ${seat}`
       );
+      setTryOnPopupOpen(true);
     } catch (error) {
       console.error(error);
       setMsg('시착 요청 중 오류 발생');
+    }
+  };
+
+  const handleCancelTryOn = async() => {
+    setTryOnPopupOpen(false);
+    setMsg('시착 요청이 취소되었습니다.');
+    setIsArriveOpen(false);
+    if (!API) return;
+
+    try {
+      const res = await fetch(`${API}/tryon/cancel?robot_id=${encodeURIComponent(TRYON_ROBOT_ID)}`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        setMsg(`시착 요청 취소 실패 (${res.status}): ${text}`);
+        return;
+      }
+      setMsg('시착 요청이 취소되었습니다.');
+    } catch (error) {
+      console.error(error);
+      setMsg('시착 요청 취소 중 오류 발생');
     }
   };
 
@@ -712,6 +738,7 @@ export default function ProductDetailPage() {
         productName={product?.name}
         size={selectedSize}
         color={selectedColor}
+        onCancel={() => handleCancelTryOn()}
         // seat={seat}
       />
 

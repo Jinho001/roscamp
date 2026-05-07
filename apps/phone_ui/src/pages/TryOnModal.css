@@ -217,3 +217,30 @@
     transform: translateY(0) scale(1);
   }
 }
+
+.tryon-modal-btn-row {
+  display: flex;
+  gap: 10px;
+}
+
+.tryon-modal-btn-row .tryon-modal-button,
+.tryon-modal-btn-row .tryon-modal-cancel-button {
+  flex: 1;
+}
+
+.tryon-modal-cancel-button {
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: #f3f4f6;
+  color: #111827;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tryon-modal-cancel-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

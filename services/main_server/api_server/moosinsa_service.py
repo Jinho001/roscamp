@@ -1169,7 +1169,7 @@ class _TryonReq(BaseModel):
     color: Optional[str] = None
     size: Optional[str] = None
     seat_id: int = 1                    # 1~4 (시착존 번호)
-    robot_id: str = "sshopy1"           # 운용 가능한 핑키 ID
+    robot_id: str = "sshopy2"           # 운용 가능한 핑키 ID
 
 @app.post("/tryon/request")
 async def endpoint_tryon_request(req: _TryonReq):
@@ -1217,7 +1217,7 @@ async def endpoint_tryon_request(req: _TryonReq):
     }
 
 @app.post("/pickup/complete")
-async def endpoint_pickup_complete(robot_id: str = "sshopy1"):
+async def endpoint_pickup_complete(robot_id: str = "sshopy2"):
     """
     수령 완료 엔드포인트 (TC 2-19).
     좌석 해제 + 회수존 이동 + 홈 복귀 트리거.
@@ -1244,6 +1244,22 @@ async def endpoint_pickup_complete(robot_id: str = "sshopy1"):
     if not ok:
         raise HTTPException(status_code=409, detail=msg)
     logger.info(f"[pickup/complete] 수령 완료 → robot={robot_id}")
+    return {"success": True, "robot_id": robot_id}
+
+@app.post("/tryon/cancel")
+async def endpoint_tryon_cancel(robot_id: str = "sshopy2"):
+    """
+    시착 취소 엔드포인트 (TC 2-20).
+    시착 진행 중인 로봇의 작업을 즉시 취소하고 홈으로 복귀 트리거.
+
+    ■ KIOSK 사용 — kiosk_tryon_arrive.py TryonArrivePage._cancel() 에서 호출.
+      '취소' 버튼 클릭 시 호출.
+      성공 시 키오스크는 kiosk_tryon_another 화면으로 전환한다.
+    """
+    ok, msg = fleet.cancel_tryon(robot_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    logger.info(f"[tryon/cancel] 시착 취소 → robot={robot_id}")
     return {"success": True, "robot_id": robot_id}
 
 # ─────────────────────────────────────────────────────────────────────────

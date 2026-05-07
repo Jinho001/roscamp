@@ -3,6 +3,7 @@ import './TryOnModal.css';
 type TryOnModalProps = {
   open: boolean;
   onClose: () => void;
+  onCancel?: () => void;
   image?: string;
   productName?: string;
   size?: number | null;
@@ -13,6 +14,7 @@ type TryOnModalProps = {
 export default function TryOnModal({
   open,
   onClose,
+  onCancel,
   image,
   productName,
   size,
@@ -69,14 +71,25 @@ export default function TryOnModal({
           </div>
         </div>
 
-        <button
-          type="button"
-          className="tryon-modal-button"
-          onClick={onClose}
-          disabled={loading}
-        >
-          {loading ? '요청 중...' : '확인'}
-        </button>
+        <div className="tryon-modal-btn-row">
+          <button
+            type="button"
+            className="tryon-modal-cancel-button"
+            onClick={onCancel}
+            disabled={loading}
+          >
+            취소
+          </button>
+
+          <button
+            type="button"
+            className="tryon-modal-button"
+            onClick={onClose}
+            disabled={loading}
+          >
+            {loading ? '요청 중...' : '확인'}
+          </button>
+        </div>
       </div>
     </div>
   );
