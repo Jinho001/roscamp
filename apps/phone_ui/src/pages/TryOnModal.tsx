@@ -41,9 +41,7 @@ export default function TryOnModal({
         </div>
 
         <div className="tryon-modal-message">
-          {message || (loading
-            ? '쇼피에게 요청을 전달하고 있어요.'
-            : '쇼피가 고객님께서 요청하신 신발을 찾으러 가고 있어요.')}
+          '선택하신 시착 위치로 이동해 주세요.'
         </div>
 
         <div className="tryon-moving-area">
@@ -53,7 +51,10 @@ export default function TryOnModal({
           </div>
 
           <div className="tryon-progress-text">
-            {loading ? '요청 전달 중...' : '쇼피 이동 중...'}
+            {/* {loading ? '요청 전달 중...' : '쇼피 이동 중...'} */}
+             {message || (loading
+            ? '쇼피에게 요청을 전달하고 있어요.'
+            : '쇼피가 고객님께서 요청하신 신발을 찾으러 가고 있어요.')}
           </div>
         </div>
 
