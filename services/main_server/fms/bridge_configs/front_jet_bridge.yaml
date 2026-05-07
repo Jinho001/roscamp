@@ -1,0 +1,19 @@
+name: front_jet_bridge
+from_domain: 14
+to_domain: 99
+
+topics:
+  # ── Robot → Server (domain 14 → 99) ──
+  /frontjet/joint_states:
+    type: sensor_msgs/msg/JointState
+    remap: /front_jet/joint_states
+
+  /work_complete:
+    type: std_msgs/msg/String
+    remap: /front_jet/work_complete
+
+  # ── Server → Robot (domain 99 → 14, reversed) ──
+  /front_jet/trigger_work:
+    type: std_msgs/msg/String
+    remap: /trigger_work
+    reversed: true

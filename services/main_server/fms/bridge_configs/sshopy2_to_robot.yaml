@@ -1,0 +1,12 @@
+name: sshopy2_to_robot
+from_domain: 99
+to_domain: 12
+
+topics:
+  /sshopy2/goal_pose:
+    type: geometry_msgs/msg/PoseStamped
+    remap: /goal_pose
+
+  /sshopy2/cmd_vel:
+    type: geometry_msgs/msg/Twist
+    remap: /cmd_vel

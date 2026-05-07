@@ -1,0 +1,32 @@
+name: sshopy3_bridge
+from_domain: 13
+to_domain: 99
+
+topics:
+  # ── Robot → Server (domain 13 → 99) ──
+  /odom:
+    type: nav_msgs/msg/Odometry
+    remap: /sshopy3/odom
+
+  /amcl_pose:
+    type: geometry_msgs/msg/PoseWithCovarianceStamped
+    remap: /sshopy3/amcl_pose
+    qos:
+      reliability: reliable
+      durability: transient_local
+
+  /battery/percent:
+    type: std_msgs/msg/Float32
+    remap: /sshopy3/battery/percent
+
+  /navigate_to_pose/_action/status:
+    type: action_msgs/msg/GoalStatusArray
+    remap: /sshopy3/navigate_to_pose/_action/status
+
+  /scan:
+    type: sensor_msgs/msg/LaserScan
+    remap: /sshopy3/scan
+    qos:
+      reliability: best_effort
+
+  # Server → Robot は sshopy3_to_robot.yaml で別途ブリッジ
