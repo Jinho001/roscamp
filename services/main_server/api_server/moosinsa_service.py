@@ -52,7 +52,12 @@ from fastapi import FastAPI, HTTPException, Request, Query, WebSocket, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from fms.robot_manager import fleet
+from fms.robot_manager import (
+    fleet,
+    # [실로봇연동] React admin_ui 와 동일한 stage 라벨 — task label 생성에 사용
+    INBOUND_STAGE_LABELS,
+    RETRIEVAL_STAGE_LABELS,
+)
 
 from db.mysql import (
     get_shoe_all_information,
@@ -1700,11 +1705,20 @@ async def endpoint_kiosk_tryon_progress(req: KioskTryonProgressRequest):
             detail=f"robot_id '{req.robot_id}' 를 찾을 수 없습니다."
         )
 
-    stage        = target.get("tryon_stage") or 0
-    arrived      = (stage == 12)
-    # tryon_stage를 0.0~1.0 진행률로 변환 (stage 범위는 fleet 구현에 따라 조정)
-    # 현재 임시: stage / 12 로 선형 변환
-    progress_pct = min(stage / 12, 1.0) if stage else 0.0
+    stage   = target.get("tryon_stage")
+    arrived = (stage == 12)
+    # [진행률버그수정] stage 상수는 식별번호일 뿐 시간순서가 아님 (15 가 11/12 사이를 비집고 들어감).
+    #   기존 stage/12 식은 AT_WAREJET(15) 에서 1.0 으로 튕겨 클라이언트의 도착 판정을 조기 발화시켰음.
+    #   stage 시간순서에 맞춘 매핑 테이블로 교체.
+    TRYON_STAGE_PROGRESS = {
+        None: 0.0,
+        10:   0.20,   # TO_WAREJET   창고로 이동
+        15:   0.45,   # AT_WAREJET   창고 도착, ware_jet 동작 중
+        11:   0.75,   # TO_TRYZONE   시착존으로 이동
+        12:   1.00,   # AT_TRYZONE   시착존 도착 — 도착 판정
+        14:   0.50,   # TO_HOME      복귀 (arrive 화면 종료 이후)
+    }
+    progress_pct = TRYON_STAGE_PROGRESS.get(stage, 0.0)
 
     logger.info(
         f"[kiosk/tryon/progress] robot={req.robot_id} "
@@ -1806,6 +1820,485 @@ async def endpoint_kiosk_stock_check(req: KioskStockCheckRequest):
         f"size={req.size} → stock={total}"
     )
     return {"in_stock": total > 0, "stock": total}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [monitoring_ui] 관제 GUI(admin_ui/monitoring_ui)용 /api/* 엔드포인트
+# ──────────────────────────────────────────────────────────────────────────────
+# PySide6 기반 admin GUI([apps/admin_ui/monitoring_ui]) 가 폴링/호출하는 엔드포인트.
+# GUI 의 api/client.py 가 기대하는 경로/형식에 맞추어 fleet 상태와 DB 데이터를
+# 변환·집계해 반환한다. 다른 컴포넌트(키오스크/모바일/React)는 이 라우터를 사용하지 않는다.
+#
+# 추가 엔드포인트 목록:
+#   POST /api/auth/login              → {token}
+#   GET  /api/dashboard               → {requests_today, pending, completed, revenue}
+#   GET  /api/robots                  → [{name, power, is_battery, connected, task, x, y}]
+#   GET  /api/schedule                → [{id, robot, task, status, start, end}]
+#   GET  /api/inventory               → [{name, size, stock, location}]
+#   GET  /api/seats                   → {seats:[{id, status:"idle/active"}]}
+#   GET  /api/requests                → [{id, seat, product, size, status}]
+#   POST /api/robot/{name}/start      → 시나리오별 분기 (delivery/inbound/retrieval)
+#   POST /api/robot/{name}/stop       → cancel_*
+#   POST /api/robot/{name}/manual     → set_manual_mode
+#   POST /api/inbound/start           → fleet.start_inbound (간이 폼)
+#   POST /api/emergency/stop          → fleet.emergency_stop_all
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── [monitoring_ui] 표시명 ↔ fleet robot_id 매핑 ──────────────────────────────
+_ROBOT_ID_TO_DISPLAY = {
+    "sshopy1":   "Sshopy 1",
+    "sshopy2":   "Sshopy 2",
+    "sshopy3":   "Sshopy 3",
+    "front_jet": "FrontJet",
+    "ware_jet":  "WareJet",
+}
+_DISPLAY_TO_ROBOT_ID = {v: k for k, v in _ROBOT_ID_TO_DISPLAY.items()}
+
+
+# ── [monitoring_ui] /map/meta 캐시 (지도 좌표 → 0..1 정규화용) ─────────────────
+# fms/main.py 의 /map/meta 와 동일 값. 추후 동적 로드 시 lifespan 에서 fetch.
+_MAP_META = {"resolution": 0.020, "origin": [-0.276, -0.229], "width": 103, "height": 56}
+
+
+def _pose_to_norm(pose: Optional[dict]) -> tuple[Optional[float], Optional[float]]:
+    """[monitoring_ui] 미터 단위 pose → floor_map 의 0..1 정규화 좌표 변환."""
+    if not pose:
+        return None, None
+    meta = _MAP_META
+    map_w_m = meta["width"]  * meta["resolution"]
+    map_h_m = meta["height"] * meta["resolution"]
+    x_norm = (pose["x"] - meta["origin"][0]) / map_w_m if map_w_m else 0.5
+    # 화면 y는 위가 0이므로 반전
+    y_norm = 1.0 - (pose["y"] - meta["origin"][1]) / map_h_m if map_h_m else 0.5
+    # 0..1 클램프
+    x_norm = max(0.0, min(1.0, x_norm))
+    y_norm = max(0.0, min(1.0, y_norm))
+    return x_norm, y_norm
+
+
+# [실로봇연동] 시나리오 stage → 화면 라벨 매핑 (React admin_ui 표시 항목과 일치)
+# - inbound_stage / retrieval_stage 는 robot_manager 의 LABELS dict 를 그대로 재사용.
+# - tryon_stage / delivery_stage 는 robot_manager 에 LABELS dict 가 없으므로 여기서 정의.
+_TRYON_STAGE_LABELS = {
+    10: "시착: 창고 이동 중",
+    11: "시착: 시착존 이동 중",
+    12: "시착: 시착존 도착 — 픽업 대기",
+    13: "시착: 회수존 이동 중",
+    14: "시착: 홈 복귀 중",
+    15: "시착: 창고 도착",
+}
+
+_DELIVERY_STAGE_LABELS = {
+    0: "배달: 창고 이동 중",
+    1: "배달: 매장 이동 중",
+    2: "배달: 홈 복귀 중",
+}
+
+
+def _compute_task_label(state: dict) -> str:
+    """[실로봇연동] 활성 stage 를 우선순위에 따라 한 줄 라벨로 반환.
+
+    React admin_ui 가 화면에 표시하는 stage 만 노출 (입고/회수/시착/배달).
+    한 로봇이 동시에 여러 시나리오 stage 를 갖지 않는다는 fleet 보장에 의존.
+    어느 stage 도 활성이 아니면 '대기중'.
+    """
+    s = state.get("inbound_stage")
+    if s is not None:
+        return INBOUND_STAGE_LABELS.get(s, f"입고 stage {s}")
+    s = state.get("retrieval_stage")
+    if s is not None:
+        return RETRIEVAL_STAGE_LABELS.get(s, f"회수 stage {s}")
+    s = state.get("tryon_stage")
+    if s is not None:
+        return _TRYON_STAGE_LABELS.get(s, f"시착 stage {s}")
+    s = state.get("delivery_stage")
+    if s is not None:
+        return _DELIVERY_STAGE_LABELS.get(s, f"배달 stage {s}")
+    return "대기중"
+
+
+def _fleet_state_to_ui(state: dict) -> dict:
+    """[monitoring_ui] fleet.get_all_states() 항목 → admin GUI 형식.
+
+    [실로봇연동] 정의되지 않은 fleet.get_robot_task_label / is_manual_mode 호출을 제거하고,
+    실제 fleet stage 필드(inbound/retrieval/tryon/delivery)에서 직접 라벨 산출.
+    manual 모드 토글 기능은 monitoring_ui 에서 사용하지 않으므로 응답에서도 제거.
+    """
+    rid = state["robot_id"]
+    is_pinky = state["type"] == "pinky"
+    x_norm, y_norm = _pose_to_norm(state.get("pose"))
+    return {
+        "name":       _ROBOT_ID_TO_DISPLAY.get(rid, rid),
+        "robot_id":   rid,
+        "power":      state.get("battery"),
+        "is_battery": is_pinky,
+        "connected":  state.get("connected", False),
+        "task":       _compute_task_label(state),
+        "x":          x_norm,
+        "y":          y_norm,
+    }
+
+
+# ── [monitoring_ui] Pydantic 요청 모델 ─────────────────────────────────────────
+
+class _AdminLoginReq(BaseModel):
+    user_id:  str
+    password: str
+
+
+class _AdminRobotStartReq(BaseModel):
+    task_name: str = ""
+    # [실로봇연동] 시착 시나리오용 좌석 (1~4); 다른 시나리오에서는 무시.
+    seat_id: int = 1
+
+
+class _AdminInboundStartReq(BaseModel):
+    # admin GUI 의 '입고 시작' 버튼은 본문 없이 호출 — 데모용 기본 1건 입고 트리거
+    robot_id: Optional[str] = None
+    items:    Optional[list] = None
+
+
+# ── [monitoring_ui] 엔드포인트 ─────────────────────────────────────────────────
+
+@app.post("/api/auth/login")
+async def api_auth_login(req: _AdminLoginReq):
+    """[monitoring_ui] 데모용 로그인 — admin/임의 비밀번호 허용. 추후 DB 인증으로 교체."""
+    if req.user_id == "admin" and req.password:
+        return {"token": "demo-token", "user_id": req.user_id}
+    raise HTTPException(status_code=401, detail="invalid credentials")
+
+
+@app.get("/api/dashboard")
+async def api_dashboard():
+    """[monitoring_ui] 대시보드 KPI.
+
+    [실로봇연동] 모든 수치는 fleet 의 in-memory 카운터 — 서버 재시작 시 0 으로 리셋.
+      requests_today        : 4개 시나리오(입고/회수/시착/배달) task 총합
+      retrieval_pending     : 회수존(top view cam) 박스 개수 (POST 로 push)
+      retrieval_completed   : stock 0→1 전이 누적 개수 (POST 로 inc)
+      sales_completed       : 보류 — None 반환 (UI 가 '—' 표시)
+      revenue               : 보류 — None 반환
+    """
+    return {
+        "requests_today":      fleet.get_total_started_requests(),
+        "retrieval_pending":   fleet.get_retrieval_zone_box_count(),
+        "retrieval_completed": fleet.get_retrieval_completed_count(),
+        "sales_completed":     None,   # 보류
+        "revenue":             None,   # 보류
+    }
+
+
+# [실로봇연동] 대시보드 카운터 set/inc 엔드포인트 ─────────────────────────
+class _RetrievalZoneBoxesReq(BaseModel):
+    count: int
+
+
+class _RetrievalCompletedIncReq(BaseModel):
+    count: int = 1
+
+
+@app.post("/api/dashboard/retrieval-zone-boxes")
+async def api_set_retrieval_zone_boxes(req: _RetrievalZoneBoxesReq):
+    """[실로봇연동] top view cam 서비스가 회수존 박스 인식 개수를 push.
+    body: {count: int}. 이후 폴링되는 /api/dashboard 가 이 값을 노출.
+    """
+    n = fleet.set_retrieval_zone_box_count(req.count)
+    return {"ok": True, "retrieval_pending": n}
+
+
+@app.post("/api/dashboard/retrieval-completed/inc")
+async def api_inc_retrieval_completed(req: Optional[_RetrievalCompletedIncReq] = None):
+    """[실로봇연동] stock 0→1 전이 발생 시 호출 — 누적 카운터 증가.
+    body: {count?: int=1}. 이후 폴링되는 /api/dashboard 가 누적치를 노출.
+    """
+    delta = req.count if req else 1
+    n = fleet.increment_retrieval_completed(delta)
+    return {"ok": True, "retrieval_completed": n}
+
+
+@app.get("/api/robots")
+async def api_robots():
+    """[monitoring_ui] 로봇 목록 — fleet 상태를 GUI 형식으로 변환."""
+    return [_fleet_state_to_ui(s) for s in fleet.get_all_states()]
+
+
+def _task_status(task: dict) -> str:
+    """[실로봇연동] React admin_ui 와 동일한 status 표기 — 진행중/완료/실패."""
+    if task.get("error"):
+        return "실패"
+    if task.get("completed"):
+        return "완료"
+    return "진행중"
+
+
+@app.get("/api/schedule")
+async def api_schedule():
+    """[monitoring_ui] SCHEDULE DB 테이블 — 4개 시나리오 task 이력.
+
+    [실로봇연동] React admin_ui 가 구현한 4개 시나리오(입고/회수/시착/배달) 의
+    in-memory task record (fleet._inbound_tasks / _retrieval_tasks /
+    _tryon_tasks / _delivery_tasks) 를 모두 합쳐 schedule rows 로 빌드.
+    """
+    sources = [
+        ("입고", fleet.get_all_inbound_tasks()),
+        ("회수", fleet.get_all_retrieval_tasks()),
+        ("시착", fleet.get_all_tryon_tasks()),
+        ("배달", fleet.get_all_delivery_tasks()),
+    ]
+
+    rows: list[dict] = []
+    for task_name, tasks in sources:
+        for t in tasks:
+            rows.append({
+                "task_id":      t["task_id"],
+                "robot":        _ROBOT_ID_TO_DISPLAY.get(t["robot_id"], t["robot_id"]),
+                "task_name":    task_name,
+                "status":       _task_status(t),
+                "stage_label":  t.get("stage_label"),
+                "started_at":   t.get("created_at"),
+                "completed_at": t.get("completed_at"),
+            })
+
+    # 최신 시작순 정렬 + 50건 제한
+    rows.sort(key=lambda r: r.get("started_at") or 0, reverse=True)
+    return rows[:50]
+
+
+@app.get("/api/inventory")
+async def api_inventory():
+    """[monitoring_ui] 재고 DB — shoes + shoes_inventory 조인.
+
+    [실로봇연동]
+    - DB 조회 실패 시 빈 리스트 대신 503 을 반환 — 클라이언트가 'DB 미연결' 을
+      가짜 빈 결과와 구분해서 표시할 수 있도록.
+    - 응답 필드 'ware_pos' (이전 'location' 에서 변경) — MSS_DB 컬럼명과 일치.
+    """
+    try:
+        shoes = get_shoe_all_information() or []
+    except Exception as e:
+        logger.warning(f"[/api/inventory] DB 조회 실패: {e}")
+        raise HTTPException(status_code=503, detail=f"DB 조회 실패: {e}")
+
+    items: list[dict] = []
+    for shoe in shoes:
+        shoe_id = shoe.get("shoe_id")
+        try:
+            inv_rows = get_shoe_information_by_shoe_id_from_inventory(shoe_id) or []
+        except HTTPException:
+            inv_rows = []
+        except Exception:
+            inv_rows = []
+        # 사이즈 변형이 없으면 stock=0, ware_pos 만 표시
+        if not inv_rows:
+            items.append({
+                "name":     shoe.get("name") or shoe_id,
+                "size":     0,
+                "stock":    0,
+                "ware_pos": shoe.get("ware_pos") or "—",
+            })
+            continue
+        for inv in inv_rows:
+            items.append({
+                "name":     shoe.get("name") or shoe_id,
+                "size":     inv.get("size") or 0,
+                "stock":    inv.get("stock") or 0,
+                "ware_pos": inv.get("ware_pos") or shoe.get("ware_pos") or "—",
+            })
+    return items
+
+
+@app.get("/api/seats")
+async def api_seats():
+    """[monitoring_ui] 좌석 현황 — fleet 의 in-memory 점유를 GUI 형식으로 변환."""
+    occ = fleet.get_seat_occupancy()
+    return {
+        "seats": [
+            {"id": sid, "status": "active" if occupied else "idle"}
+            for sid, occupied in sorted(occ.items())
+        ]
+    }
+
+
+def _tryon_request_status_label(t: dict) -> str:
+    """[실로봇연동] 시착 task → '실시간 시착 요청' 표시용 status 라벨.
+
+    - error 있으면: '취소' 그대로 / 그 외는 '실패: {reason}'
+    - completed 만 True 이면: '완료'
+    - 진행 중이면: TRYON_STAGE_LABELS 의 stage_label
+    """
+    err = t.get("error")
+    if err:
+        return "취소" if err == "취소" else f"실패: {err}"
+    if t.get("completed"):
+        return "완료"
+    return t.get("stage_label") or "진행중"
+
+
+@app.get("/api/requests")
+async def api_requests():
+    """[monitoring_ui] 실시간 시착 요청 — 시작된 모든 시착 task (active + 완료/실패).
+
+    [실로봇연동] 정의되지 않은 fleet.get_active_tryon_requests 호출을 제거하고,
+    fleet.get_all_tryon_tasks() 로 빌드. kiosk_tryon 의 시착 요청 페이로드 그대로:
+    seat_id / product_id / size / 그리고 tryon_delivery 진행 stage_label 을 status 로 노출.
+    프로세스 메모리 기반이므로 서버 재시작 시 0 건 으로 리셋, 재시작 후 누적.
+    """
+    rows: list[dict] = []
+    for t in fleet.get_all_tryon_tasks():
+        rows.append({
+            "id":         t["task_id"],            # TRY-####  (UI 가 시퀀스 1,2,3 으로 매핑)
+            "seat":       t.get("seat_id"),
+            "product":    t.get("product_id"),
+            "size":       t.get("size"),
+            "status":     _tryon_request_status_label(t),
+            "started_at": t.get("created_at"),     # 정렬용
+        })
+    rows.sort(key=lambda r: r.get("started_at") or 0, reverse=True)
+    return rows
+
+
+@app.post("/api/robot/{name}/start")
+async def api_robot_start(name: str, req: _AdminRobotStartReq):
+    """
+    [monitoring_ui] 로봇 START — task_name 키워드로 시나리오 분기.
+
+    [실로봇연동] React admin_ui 가 트리거할 수 있는 모든 task 지원:
+      Sshopy:   delivery / inbound / retrieval / tryon (seat_id 사용)
+      Sshopy & Jetcobot: arm_test / arm_reset
+    """
+    rid = _DISPLAY_TO_ROBOT_ID.get(name, name)
+    task = (req.task_name or "").lower()
+
+    if "delivery" in task or "return" in task:
+        ok = fleet.start_delivery(rid)
+        return {"ok": ok, "robot_id": rid}
+    if "inbound" in task:
+        ok, msg, task_id = fleet.start_inbound(items=[], robot_id=rid)
+        return {"ok": ok, "message": msg, "task_id": task_id}
+    if "retrieval" in task:
+        ok, msg, task_id = fleet.start_retrieval(robot_id=rid)
+        return {"ok": ok, "message": msg, "task_id": task_id}
+    if "tryon" in task:
+        # admin GUI 데모용 — product/color/size 는 비워서 실제 fleet.start_tryon 으로 위임
+        ok, msg = fleet.start_tryon(
+            rid, seat_id=req.seat_id, product_id="admin-ui-demo",
+            color=None, size=None,
+        )
+        return {"ok": ok, "message": msg, "robot_id": rid, "seat_id": req.seat_id}
+    if "arm_test" in task:
+        ok = fleet.arm_test(rid)
+        return {"ok": ok, "robot_id": rid, "action": "arm_test"}
+    if "arm_reset" in task:
+        ok = fleet.arm_reset(rid)
+        return {"ok": ok, "robot_id": rid, "action": "arm_reset"}
+    raise HTTPException(status_code=400, detail=f"알 수 없는 task_name: {req.task_name}")
+
+
+@app.get("/api/robot/{name}/log")
+async def api_robot_log(name: str, limit: int = 50):
+    """[실로봇연동] 로봇 이벤트 로그 — 로그확인 버튼 사용.
+    fleet 의 per-robot deque(maxlen=200) 에서 최근 limit 건 반환.
+    """
+    rid = _DISPLAY_TO_ROBOT_ID.get(name, name)
+    return {"robot_id": rid, "entries": fleet.get_robot_log(rid, limit=limit)}
+
+
+@app.post("/api/robot/{name}/stop")
+async def api_robot_stop(name: str):
+    """[monitoring_ui] 로봇 STOP — 진행 중 시나리오를 모두 취소."""
+    rid = _DISPLAY_TO_ROBOT_ID.get(name, name)
+    state = fleet.get_robot_state(rid)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"로봇 없음: {name}")
+    cancelled = []
+    if state.get("tryon_stage") is not None and fleet.cancel_tryon(rid):
+        cancelled.append("tryon")
+    if state.get("delivery_stage") is not None and fleet.cancel_delivery(rid):
+        cancelled.append("delivery")
+    if state.get("inbound_task_id"):
+        ok, _ = fleet.cancel_inbound(state["inbound_task_id"])
+        if ok: cancelled.append("inbound")
+    if state.get("retrieval_task_id"):
+        ok, _ = fleet.cancel_retrieval(state["retrieval_task_id"])
+        if ok: cancelled.append("retrieval")
+    fleet.cmd_vel(rid, 0.0, 0.0)
+    return {"ok": True, "robot_id": rid, "cancelled": cancelled}
+
+
+@app.post("/api/robot/{name}/manual")
+async def api_robot_manual(name: str):
+    """[monitoring_ui] 수동조작 토글 — 현재 모드를 반전한다."""
+    rid = _DISPLAY_TO_ROBOT_ID.get(name, name)
+    new_mode = not fleet.is_manual_mode(rid)
+    ok = fleet.set_manual_mode(rid, new_mode)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"로봇 없음: {name}")
+    return {"ok": True, "robot_id": rid, "manual": new_mode}
+
+
+@app.post("/api/inbound/start")
+async def api_inbound_start(req: Optional[_AdminInboundStartReq] = None):
+    """
+    [monitoring_ui] 입고 시작 버튼 — 본문 없이도 호출 가능 (items=[] 데모).
+    실제 운용 시 admin GUI 에서 입고할 상품 목록을 전달하도록 확장 필요.
+    """
+    items = req.items if req and req.items else []
+    rid   = req.robot_id if req else None
+    ok, msg, task_id = fleet.start_inbound(items=items, robot_id=rid)
+    return {"ok": ok, "message": msg, "task_id": task_id}
+
+
+@app.post("/api/emergency/stop")
+async def api_emergency_stop():
+    """[monitoring_ui] 비상정지 — 모든 시나리오 취소 + 모든 로봇 cmd_vel(0,0)."""
+    result = fleet.emergency_stop_all()
+    return {"ok": True, **result}
+
+
+@app.websocket("/ws/admin")
+async def ws_admin(ws: WebSocket):
+    """
+    [monitoring_ui] 실시간 fleet 상태 push 채널 (1초 주기).
+    monitoring_ui 가 QWebSocket 으로 구독하면 폴링 부담 없이 stage 전이를 즉시 반영할 수 있다.
+    payload: {type:"fleet_status", robots:[...], seats:{seats:[...]}, requests:[...]}
+    """
+    await ws.accept()
+    try:
+        while True:
+            # [실로봇연동] requests 는 /api/requests 와 동일한 shape 으로 빌드
+            req_rows: list[dict] = []
+            for t in fleet.get_all_tryon_tasks():
+                req_rows.append({
+                    "id":         t["task_id"],
+                    "seat":       t.get("seat_id"),
+                    "product":    t.get("product_id"),
+                    "size":       t.get("size"),
+                    "status":     _tryon_request_status_label(t),
+                    "started_at": t.get("created_at"),
+                })
+            req_rows.sort(key=lambda r: r.get("started_at") or 0, reverse=True)
+
+            payload = {
+                "type":     "fleet_status",
+                "robots":   [_fleet_state_to_ui(s) for s in fleet.get_all_states()],
+                "seats":    {
+                    "seats": [
+                        {"id": sid, "status": "active" if occ else "idle"}
+                        for sid, occ in sorted(fleet.get_seat_occupancy().items())
+                    ],
+                },
+                "requests": req_rows,
+            }
+            await ws.send_json(payload)
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"[/ws/admin] error: {e}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [monitoring_ui] 추가 섹션 끝
+# ══════════════════════════════════════════════════════════════════════════════
 
 
 # ══════════════════════════════════════════════════════════════

@@ -804,7 +804,11 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
             # [시착요청연동] 버튼 비활성화 (중복 클릭 방지)
             self._request_btn.setEnabled(False)
 
-            # [시착요청연동] STEP 1: DB 재고 확인
+            # [좌석실시간검증] 클릭 시점의 선택 좌석 ID를 별도 보관
+            # (set_seat_status 호출 시 self._sel_seat 가 리셋될 수 있음)
+            requested_seat = self._sel_seat
+
+            # [시착요청연동] STEP 2: DB 재고 확인
             def _on_stock(data):
                 if data is None:
                     self._request_btn.setEnabled(True)
@@ -822,7 +826,7 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
                     dlg.exec()
                     return
 
-                # [시착요청연동] STEP 2: 로봇 시착 요청
+                # [시착요청연동] STEP 3: 로봇 시착 요청
                 def _on_tryon(resp):
                     self._request_btn.setEnabled(True)
                     if resp is None:
@@ -849,12 +853,44 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
                     callback=_on_tryon,
                 )
 
-            self._api.check_stock(
-                shoe_id=shoe_id,
-                color=self._sel_color,
-                size=self._sel_size,
-                callback=_on_stock,
-            )
+            # [좌석실시간검증] STEP 1: 시착 요청 직전 좌석 점유 재조회.
+            # 캐시된 self._seats 와 실제 서버 상태가 어긋날 수 있어,
+            # 요청 직전에 한 번 더 확인하고 UI 도 같이 갱신한다.
+            def _on_seat_recheck(data):
+                from kiosk_api_client import normalize_seat_status
+                if data is None:
+                    self._request_btn.setEnabled(True)
+                    dlg = ErrorDialog(
+                        "서버와 통신에 실패했습니다.\n잠시 후 다시 시도해 주세요.",
+                        self._s, self)
+                    dlg.exec()
+                    return
+
+                # 최신 좌석 상태로 UI 갱신. set_seat_status 내부에서
+                # 점유로 바뀐 좌석이면 선택 자동 해제.
+                self._seats = normalize_seat_status(data)
+                self._seat_map.set_seat_status(self._seats)
+
+                # 요청 좌석이 그 사이 점유로 변경된 경우 → 반려
+                if self._seats.get(requested_seat, False):
+                    self._request_btn.setEnabled(True)
+                    dlg = ErrorDialog(
+                        f"선택하신 좌석({requested_seat})을\n"
+                        "방금 다른 고객님이 사용 요청하셨습니다.\n"
+                        "다른 좌석을 선택해 주세요.",
+                        self._s, self)
+                    dlg.exec()
+                    return
+
+                # 검증 통과 → 기존 재고 확인 단계로 진행
+                self._api.check_stock(
+                    shoe_id=shoe_id,
+                    color=self._sel_color,
+                    size=self._sel_size,
+                    callback=_on_stock,
+                )
+
+            self._api.fetch_seat_status(callback=_on_seat_recheck)
         else:
             # API 없음 (mock 모드) — 재고 확인 없이 바로 진행
             selection["robot_id"] = "sshopy2"
