@@ -544,6 +544,7 @@ class RobotManager:
         state._last_arrival_time = 0.0
         wp = WAYPOINTS[0]
         print(f"[fleet] {robot_id} 배달 시작 → stage 0 창고 ({wp['x']}, {wp['y']})")
+        self._post_delivery_status(state, "쇼피가 고객님께서 요청하신 신발을 찾으러 가고 있어요.")
         return self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
 
     def _check_arrival(self, state: _RobotState):
@@ -660,7 +661,7 @@ class RobotManager:
             #   2) 끝나면 시착존 N 으로 출발
             state.tryon_stage = TRYON_STAGE_AT_WAREJET
             print(f"[fleet] {robot_id} (시착) 창고 도착 → ware_jet 그리퍼 동작 시작 (sshopy 대기)")
-            self._post_delivery_status(state,"쇼피가 창고로 이동중 입니다.")  # 창고 도착 POST (시착존 출발은 ware_jet 완료 후)
+            # self._post_delivery_status(state,"쇼피가 창고로 이동중 입니다.")  # 창고 도착 POST (시착존 출발은 ware_jet 완료 후)
 
             def _run_warejet_then_advance():
                 ok = self._ssh_exec("ware_jet", self._SCRIPTS["tryon_pick"])

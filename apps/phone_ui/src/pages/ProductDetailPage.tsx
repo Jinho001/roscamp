@@ -472,9 +472,10 @@ export default function ProductDetailPage() {
    *   - 도착 감지: WS {API}/ws/amr → AMR_ARRIVE → ArrivalModal 자동 표시
    *   - 수령 완료: ArrivalModal onClose에서 POST {API}/pickup/complete
    * ============================================================ */
-  const TRYON_ROBOT_ID = 'sshopy2';   // 임시 하드코딩
+  const TRYON_ROBOT_ID = 'sshopy1';   // 임시 하드코딩
 
   const handleTryOnRequest = async () => {
+    setTryOnMessage('');
     if (!API) {
       setMsg('API_URL 미설정');
       return;
@@ -512,6 +513,8 @@ export default function ProductDetailPage() {
 
   const handleCancelTryOn = async() => {
     setTryOnPopupOpen(false);
+    setTryOnMessage('');
+    
     setMsg('시착 요청이 취소되었습니다.');
     setIsArriveOpen(false);
     if (!API) return;
@@ -733,7 +736,10 @@ export default function ProductDetailPage() {
       {/* 시착 진행중 */}
       <TryOnModal
         open={tryOnPopupOpen}
-        onClose={() => setTryOnPopupOpen(false)}
+        onClose={() => {
+          setTryOnPopupOpen(false);
+          setTryOnMessage('쇼피가 고객님께서 요청하신 신발을 찾으러 가고 있어요.');
+        }}
         image={displayImage}
         productName={product?.name}
         size={selectedSize}
