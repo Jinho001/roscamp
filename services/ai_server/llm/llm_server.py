@@ -4,7 +4,6 @@ import struct
 import re
 import difflib
 import pymysql
-import random
 
 # ── MySQL 접속 설정 ──
 DB_CONFIG = {
@@ -224,7 +223,7 @@ def load_inventory_from_db():
                     s.shoe_id,
                     s.brand,
                     s.model,
-                    s.colors,
+                    s.colors AS colors,
                     s.image_url,
                     s.price,
                     s.tags,
@@ -454,8 +453,6 @@ def get_recommendations(user_text, accumulated_tags, inventory):
         ranked,
         key=lambda x: (-x["score"], x["price"] if isinstance(x["price"], int) else 999999999)
     )
-
-    top_pool = ranked[:10]
 
     return ranked[:3], target_model, mentioned_brands
 
