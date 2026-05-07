@@ -544,6 +544,7 @@ class RobotManager:
         state._last_arrival_time = 0.0
         wp = WAYPOINTS[0]
         print(f"[fleet] {robot_id} 배달 시작 → stage 0 창고 ({wp['x']}, {wp['y']})")
+        self._post_delivery_status(state, "쇼피가 고객님께서 요청하신 신발을 찾으러 가고 있어요.")
         return self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
 
     def _check_arrival(self, state: _RobotState):
@@ -660,7 +661,7 @@ class RobotManager:
             #   2) 끝나면 시착존 N 으로 출발
             state.tryon_stage = TRYON_STAGE_AT_WAREJET
             print(f"[fleet] {robot_id} (시착) 창고 도착 → ware_jet 그리퍼 동작 시작 (sshopy 대기)")
-            self._post_delivery_status(state, status="쇼피가 창고에 도착 했어요")  # MOOsinsa 서버에 매장 도착 알림
+            # self._post_delivery_status(state,"쇼피가 창고로 이동중 입니다.")  # 창고 도착 POST (시착존 출발은 ware_jet 완료 후)
 
             def _run_warejet_then_advance():
                 ok = self._ssh_exec("ware_jet", self._SCRIPTS["tryon_pick"])
@@ -672,7 +673,7 @@ class RobotManager:
                     wp = TRYZONES[state.tryon_seat]
                     self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
                     print(f"[fleet] {robot_id} (시착) ware_jet 완료 → 시착존 {state.tryon_seat} 이동")
-                    self._post_delivery_status(state, status="쇼피가 신발을 받아서 시착존으로 이동 중이에요")  # MOOsinsa 서버에 시착존 이동 알림
+                    self._post_delivery_status(state,"쇼피가 시착존으로 이동중 입니다.")
                 else:
                     print(f"[fleet] {robot_id} (시착) AT_WAREJET 도중 cancel — 다음 단계 스킵")
 
@@ -758,7 +759,6 @@ class RobotManager:
         except Exception as e:
             print(f"[fleet] {state.robot_id} _post_arrive error: {e}")
 
-
     def _post_delivery_status(self, state: _RobotState, status: str):
         """배달 상태 변경 시 MOOsinsa 서버에 POST 요청."""
         ip = os.getenv("MOOSINSA_MAIN_SERVER_IP")
@@ -769,11 +769,10 @@ class RobotManager:
             return
         url = f"http://{ip}:{port}/amr/delivery_status"
         try:
-            response = requests.post(url, json={"robot_id": state.robot_id, "status": status}, timeout=5.0)
+            response = requests.post(url, json={"robot_id": state.robot_id, "type": "AMR_DELIVERY_STATUS", "status": status}, timeout=5.0)
             print(f"[fleet] {state.robot_id} posted delivery_status='{status}': {response.status_code}")
         except Exception as e:
             print(f"[fleet] {state.robot_id} _post_delivery_status error: {e}")
-
 
     # ── 시착 시나리오 (Scene 2) ───────────────────────────────────────────────
 
