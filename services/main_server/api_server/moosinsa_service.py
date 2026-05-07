@@ -2068,10 +2068,13 @@ async def api_schedule():
 async def api_inventory():
     """[monitoring_ui] 재고 DB — shoes + shoes_inventory 조인.
 
-    [실로봇연동]
-    - DB 조회 실패 시 빈 리스트 대신 503 을 반환 — 클라이언트가 'DB 미연결' 을
-      가짜 빈 결과와 구분해서 표시할 수 있도록.
-    - 응답 필드 'ware_pos' (이전 'location' 에서 변경) — MSS_DB 컬럼명과 일치.
+    [실로봇연동][컬럼명수정] 실제 MSS_DB 스키마 (DESCRIBE 로 확인):
+        shoes:           id, brand, model, image_url, price, shoe_id, sizes(json), colors(json), tags
+        shoes_inventory: id, shoe_id, product_id, size, stock, warehouse_pos, color, image_url
+
+      - shoes 에는 'name' 컬럼이 없음 → brand + model 조합으로 표시.
+      - shoes_inventory 의 위치 컬럼은 'warehouse_pos' (이전에 잘못 추정한 'ware_pos' 가 아님).
+      - DB 조회 실패 시 503 — 클라이언트가 'DB 미연결' 을 빈 결과와 구분 가능.
     """
     try:
         shoes = get_shoe_all_information() or []
@@ -2081,28 +2084,34 @@ async def api_inventory():
 
     items: list[dict] = []
     for shoe in shoes:
-        shoe_id = shoe.get("shoe_id")
+        shoe_id = shoe.get("shoe_id") or ""
+        brand   = (shoe.get("brand") or "").strip()
+        model   = (shoe.get("model") or "").strip()
+        # 사용자에게 표시할 상품명 — '브랜드 모델'. 둘 다 비면 shoe_id 로 폴백.
+        name    = (f"{brand} {model}".strip()) or shoe_id
+
         try:
             inv_rows = get_shoe_information_by_shoe_id_from_inventory(shoe_id) or []
         except HTTPException:
             inv_rows = []
         except Exception:
             inv_rows = []
-        # 사이즈 변형이 없으면 stock=0, ware_pos 만 표시
+
+        # 사이즈 변형이 없으면 stock=0 으로 1행만 노출 (선반위치 미지정)
         if not inv_rows:
             items.append({
-                "name":     shoe.get("name") or shoe_id,
-                "size":     0,
-                "stock":    0,
-                "ware_pos": shoe.get("ware_pos") or "—",
+                "name":          name,
+                "size":          0,
+                "stock":         0,
+                "warehouse_pos": "—",
             })
             continue
         for inv in inv_rows:
             items.append({
-                "name":     shoe.get("name") or shoe_id,
-                "size":     inv.get("size") or 0,
-                "stock":    inv.get("stock") or 0,
-                "ware_pos": inv.get("ware_pos") or shoe.get("ware_pos") or "—",
+                "name":          name,
+                "size":          inv.get("size") or 0,
+                "stock":         inv.get("stock") or 0,
+                "warehouse_pos": inv.get("warehouse_pos") or "—",
             })
     return items
 

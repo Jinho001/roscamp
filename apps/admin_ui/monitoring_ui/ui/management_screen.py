@@ -503,8 +503,8 @@ class ManagementScreen(QWidget):
             stock_item = QTableWidgetItem(str(stock))
             stock_item.setForeground(QColor("#cf222e" if stock <= 1 else "#1f2328"))
             self.tbl_inv.setItem(row, 2, stock_item)
-            # [실로봇연동] location → ware_pos
-            self.tbl_inv.setItem(row, 3, QTableWidgetItem(item.get("ware_pos", "—")))
+            # [실로봇연동][컬럼명수정] DB 실제 컬럼명은 'warehouse_pos' (이전 잘못 추정한 ware_pos 아님)
+            self.tbl_inv.setItem(row, 3, QTableWidgetItem(item.get("warehouse_pos", "—")))
 
     # ── Data update slots ─────────────────────────────────────────────────
 
