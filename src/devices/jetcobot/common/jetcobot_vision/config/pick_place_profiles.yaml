@@ -29,7 +29,7 @@ receiving_zone:                           # 회수존(입고존) 상자 픽업
   max_w: 170
   min_h: 90
   max_h: 170
-  pick_offset_mm: [-17.6, -9.9, 0.0]      # [x, y, z] 보정값 (mm) — 실측 오차 역산
+  pick_offset_mm: [-7.6, -9.9, 5.0]      # [x, y, z] 보정값 (mm) — 실측 오차 역산
   grasp_roll: -179.98
   grasp_pitch: 5.01
   grasp_yaw_offset: -179.0
@@ -51,10 +51,10 @@ pinky_tray_place:
   hsv_lower: [0, 0, 208]
   hsv_upper: [158, 30, 255]
   min_w: 20
-  max_w: 50
+  max_w: 100
   min_h: 20
-  max_h: 50
-  pick_offset_mm: [0.0, 0.0, 0.0]
+  max_h: 100
+  pick_offset_mm: [10.0, -10.0, 15.0]
   grasp_roll: -178.81                     # TODO: place 자세 실측 후 수정
   grasp_pitch: 0.94
   grasp_yaw_offset: 0.0

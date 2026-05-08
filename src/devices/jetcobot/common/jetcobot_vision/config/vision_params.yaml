@@ -1,7 +1,7 @@
 # vision_params.yaml
 # 노드 이름이 launch 파일의 name= 과 반드시 일치해야 합니다.
 # ※ ObbBoxArray 토픽은 메인 PC의 cv_detect_server.py가 발행
-# HSV/크기 파라미터는 cv_detect_server.py 실행 인자로 전달
+#    HSV/크기 파라미터는 cv_detect_server.py 실행 인자로 전달
 
 coord_transform_node:
   ros__parameters:
