@@ -1,0 +1,91 @@
+# vision_params.yaml
+# 노드 이름이 launch 파일의 name= 과 반드시 일치해야 합니다.
+# ※ ObbBoxArray 토픽은 메인 PC의 cv_detect_server.py가 발행
+# HSV/크기 파라미터는 cv_detect_server.py 실행 인자로 전달
+
+coord_transform_node:
+  ros__parameters:
+    # handeye_result.yaml T_ee2cam (row-major 4×4)
+    handeye_matrix:
+      - 0.9999456694681534
+      - -0.007015041752104461
+      - 0.007710207591392989
+      - 0.00397572785661528
+      - 0.007410287985286183
+      - 0.9985939674983642
+      - -0.052489767649047024
+      - -0.06134913400345819
+      - -0.007331148877308805
+      - 0.052544050710732725
+      - 0.9985916968366233
+      - 0.022436974891112085
+      - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
+    # camera_info.yaml [fx, fy, cx, cy]
+    camera_intrinsics:
+      - 990.8120239698858
+      - 987.6160053978392
+      - 301.19713298628164
+      - 238.38042557352367
+    observe_pose:
+      - -62.4
+      - -87.9
+      - 314.2
+      - -161.81
+      - 0.94
+      - -179.37
+    z_surface_mm: 95.0
+    obb_topic:    "/detect_bridge_node/obb_boxes"
+
+vision_pick_node:
+  ros__parameters:
+    port:                  "/dev/ttyJETCOBOT"
+    baud:                  1000000
+    grasp_roll:            -178.81
+    grasp_pitch:           0.94
+    grasp_yaw_offset:      0.0
+    tcp_offset:
+      - 0.0
+      - 20.0
+      - 110.0
+    pick_z_offset_mm:      20.0
+    detect_timeout_sec:    10.0
+    coord_topic:           "/coord_transform_node/pick_point"
+    coord_enable_service:  "/coord_transform_node/enable"
+    cv_detect_server_url:  "http://192.168.1.4:8000"
+
+vision_place_node:
+  ros__parameters:
+    port:                  "/dev/ttyJETCOBOT"
+    baud:                  1000000
+    grasp_roll:            -178.81
+    grasp_pitch:           0.94
+    grasp_yaw_offset:      0.0
+    tcp_offset:
+      - 0.0
+      - 20.0
+      - 110.0
+    pick_z_offset_mm:      20.0
+    detect_timeout_sec:    10.0
+    coord_topic:           "/coord_transform_node/pick_point"
+    coord_enable_service:  "/coord_transform_node/enable"
+    cv_detect_server_url:  "http://192.168.1.4:8000"
+
+vision_pick_place_node:
+  ros__parameters:
+    port:                  "/dev/ttyJETCOBOT"
+    baud:                  1000000
+    grasp_roll:            -178.81
+    grasp_pitch:           0.94
+    grasp_yaw_offset:      0.0
+    tcp_offset:
+      - 0.0
+      - 20.0
+      - 100.0
+    pick_z_offset_mm:      20.0
+    detect_timeout_sec:    10.0
+    coord_topic:           "/coord_transform_node/pick_point"
+    coord_enable_service:  "/coord_transform_node/enable"
+    cv_detect_server_url:  "http://192.168.1.4:8081"
