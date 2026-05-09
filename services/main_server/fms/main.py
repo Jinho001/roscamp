@@ -247,10 +247,12 @@ class RetrievalDbRestoredCmd(BaseModel):
 
 
 @app.post("/retrieval/start")
-def retrieval_start(robot_id: str = "sshopy2"):
-    """회수 시나리오 시작 — 입구 카운터 이동 → FrontJet 상차 → 상품 식별 대기."""
+def retrieval_start(robot_id: str = "sshopy2", slot_id: int = -1):
+    """회수 시나리오 시작 — 입구 카운터 이동 → FrontJet 상차 → 상품 식별 대기.
+    slot_id: 회수존 슬롯 번호 (0~7, retrieval_watcher_node가 전달). -1이면 미지정.
+    """
     ok_f, msg, task_id = fleet.start_retrieval(robot_id=robot_id)
-    return {"ok": ok_f, "message": msg, "task_id": task_id, "robot_id": robot_id}
+    return {"ok": ok_f, "message": msg, "task_id": task_id, "robot_id": robot_id, "slot_id": slot_id}
 
 
 @app.post("/retrieval/identify")
