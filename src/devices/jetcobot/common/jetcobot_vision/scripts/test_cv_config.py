@@ -62,8 +62,8 @@ def main():
     )
     parser.add_argument(
         "--server",
-        default="http://192.168.1.4:8000",
-        help="CV Detect Server URL (default: http://192.168.1.4:8000)"
+        default="http://192.168.1.121:8081",
+        help="CV Detect Server URL (default: http://192.168.1.121:8081)"
     )
     parser.add_argument(
         "--list",
