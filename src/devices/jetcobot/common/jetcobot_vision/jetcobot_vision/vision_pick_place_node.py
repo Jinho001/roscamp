@@ -386,7 +386,8 @@ class VisionPickPlaceNode(Node):
                 self.get_logger().warn(f"z_surface_mm 업데이트 실패: {exc}")
 
         cfg = {}
-        for key in ("hsv_lower", "hsv_upper", "min_w", "max_w", "min_h", "max_h"):
+        for key in ("hsv_lower", "hsv_upper", "min_area", "max_area",
+                    "min_w", "max_w", "min_h", "max_h", "morph_k"):
             if key in profile and profile[key] is not None:
                 cfg[key] = profile[key]
         if cfg:

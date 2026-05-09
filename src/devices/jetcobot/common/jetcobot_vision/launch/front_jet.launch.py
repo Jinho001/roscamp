@@ -1,16 +1,18 @@
 """
-jetcobot_vision.launch.py
-=========================
-기본 노드 기동 (WareJet / 공통):
-  1. coord_transform_node   — Static TF + 역투영 → /coord_transform/pick_point
-  2. vision_pick_place_node — Action Server /vision_pick + /vision_place (통합)
+front_jet.launch.py
+===================
+FrontJet 전용 launch.
 
-  ※ ObbBoxArray 토픽은 메인 PC의 cv_detect_server.py가 직접 발행
+기동 노드:
+  1. coord_transform_node   — Static TF + 역투영 → /coord_transform/pick_point
+  2. vision_pick_place_node — Action Server /vision_pick + /vision_place
+  3. retrieval_watcher_node — 회수존 8칸 감시 → FMS 알림 (FrontJet 전용)
+
   ※ FMS가 Pick/Place 시퀀스를 직접 제어하므로 coordinator 노드 불필요
 
 사용법:
-  ros2 launch jetcobot_vision jetcobot_vision.launch.py
-  ros2 launch jetcobot_vision jetcobot_vision.launch.py params_file:=/path/to/custom.yaml
+  ros2 launch jetcobot_vision front_jet.launch.py
+  ros2 launch jetcobot_vision front_jet.launch.py params_file:=/path/to/custom.yaml
 """
 
 import os
@@ -46,6 +48,14 @@ def generate_launch_description() -> LaunchDescription:
             package="jetcobot_vision",
             executable="vision_pick_place_node",
             name="vision_pick_place_node",
+            parameters=[params],
+            output="screen",
+            emulate_tty=True,
+        ),
+        Node(
+            package="jetcobot_vision",
+            executable="retrieval_watcher_node",
+            name="retrieval_watcher_node",
             parameters=[params],
             output="screen",
             emulate_tty=True,
