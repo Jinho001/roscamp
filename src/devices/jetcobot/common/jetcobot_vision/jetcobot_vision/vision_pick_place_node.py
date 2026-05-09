@@ -90,7 +90,7 @@ class VisionPickPlaceNode(Node):
         self.declare_parameter("detect_timeout_sec",   10.0)
         self.declare_parameter("coord_topic",          "/coord_transform_node/pick_point")
         self.declare_parameter("coord_enable_service", "/coord_transform_node/enable")
-        self.declare_parameter("cv_detect_server_url", "http://192.168.1.4:8081")
+        self.declare_parameter("cv_detect_server_url", "http://192.168.1.121:8081")
 
         port                      = self.get_parameter("port").value
         baud                      = self.get_parameter("baud").value
@@ -142,6 +142,11 @@ class VisionPickPlaceNode(Node):
             UpdatePose, "/coord_transform_node/update_pose", callback_group=self._cb_group
         )
 
+        # Watcher 제어 서비스 클라이언트
+        self._set_watch_client = self.create_client(
+            SetBool, "/retrieval_watcher_node/set_watch", callback_group=self._cb_group
+        )
+
         # Action Servers
         self._pick_server = ActionServer(
             self, VisionPick, "/vision_pick",
@@ -161,10 +166,13 @@ class VisionPickPlaceNode(Node):
         # FMS 토픽 인터페이스 (roslibpy → rosbridge 경유)
         self._pick_result_pub  = self.create_publisher(String, "/jetcobot/result/pick",  10)
         self._place_result_pub = self.create_publisher(String, "/jetcobot/result/place", 10)
+        self._reset_result_pub = self.create_publisher(String, "/jetcobot/result/reset", 10)
         self.create_subscription(String, "/jetcobot/cmd/pick",
                                  self._on_cmd_pick,  10, callback_group=self._cb_group)
         self.create_subscription(String, "/jetcobot/cmd/place",
                                  self._on_cmd_place, 10, callback_group=self._cb_group)
+        self.create_subscription(String, "/jetcobot/cmd/reset",
+                                 self._on_cmd_reset, 10, callback_group=self._cb_group)
 
         self.get_logger().info("VisionPickPlaceNode 시작 완료")
 
@@ -219,6 +227,28 @@ class VisionPickPlaceNode(Node):
             daemon=True,
         ).start()
 
+    def _on_cmd_reset(self, msg: String) -> None:
+        """FMS가 /jetcobot/cmd/reset 토픽으로 리셋 명령 전달 시 처리."""
+        self.get_logger().info("[cmd/reset] 수신")
+        threading.Thread(target=self._run_reset_and_publish, daemon=True).start()
+
+    def _run_reset_and_publish(self) -> None:
+        ok = self._run_reset()
+        self._reset_result_pub.publish(String(data=json.dumps({"success": ok})))
+        self.get_logger().info(f"[result/reset] 발행: success={ok}")
+
+    def _run_reset(self) -> bool:
+        if self._mc is None:
+            return False
+        try:
+            self._mc.send_angles([0, 0, 0, 0, 0, 0], _PICK_SPEED)
+            self._wait_moving()
+            self._mc.set_gripper_value(_GRIPPER_OPEN, 30)
+            return True
+        except Exception as e:
+            self.get_logger().error(f"reset 실패: {e}")
+            return False
+
     def _run_pick_and_publish(self, location: str, box_index: int) -> None:
         """토픽 명령으로 Pick 실행 후 결과를 /jetcobot/result/pick에 발행."""
         result = self._run_pick(location, box_index)
@@ -268,13 +298,16 @@ class VisionPickPlaceNode(Node):
             if not self._do_pick(x_mm, y_mm, z_mm, pick_pt.yaw_deg, profile):
                 return {"success": False, "message": "픽업 동작 실패"}
 
-            return {
+            result = {
                 "success": True,
                 "message": f"location={location} 픽업 완료",
                 "pick_point_base": {"x": pick_pt.x, "y": pick_pt.y, "z": pick_pt.z},
             }
+            return result
         finally:
             self._action_lock.release()
+            # Pick 완료 후 감시 자세 복귀 (성공/실패 무관)
+            threading.Thread(target=self._return_to_watch, daemon=True).start()
 
     def _run_place(self, location: str, box_index: int = -1) -> dict:
         """Place 핵심 로직. Action/토픽 양쪽에서 공통 사용."""
@@ -319,6 +352,8 @@ class VisionPickPlaceNode(Node):
             }
         finally:
             self._action_lock.release()
+            # Place 완료 후 감시 자세 복귀 (성공/실패 무관)
+            threading.Thread(target=self._return_to_watch, daemon=True).start()
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -417,6 +452,33 @@ class VisionPickPlaceNode(Node):
                 requests.post(url, json=cfg, timeout=2.0)
             except Exception as exc:
                 self.get_logger().warn(f"cv_detect_server 전송 실패: {exc}")
+
+    def _return_to_watch(self) -> None:
+        """Pick/Place 완료 후 회수존 감시 자세로 복귀.
+        1. receiving_zone observe_pose로 이동
+        2. cv_detect_server에 receiving_zone 파라미터 전송
+        3. Watcher 활성화
+        """
+        profile = _PROFILES.get("receiving_zone")
+        if profile is None:
+            self.get_logger().warn("[watch] receiving_zone 프로파일 없음 — 복귀 생략")
+            return
+
+        self.get_logger().info("[watch] 감시 자세 복귀 시작")
+        self._send_cv_config(profile)
+        self._move_to_observe("receiving_zone", profile)
+
+        # Watcher 활성화
+        if self._set_watch_client.service_is_ready():
+            try:
+                req = SetBool.Request()
+                req.data = True
+                self._set_watch_client.call(req)
+                self.get_logger().info("[watch] Watcher 활성화 완료")
+            except Exception as exc:
+                self.get_logger().warn(f"[watch] Watcher 활성화 실패: {exc}")
+        else:
+            self.get_logger().warn("[watch] set_watch 서비스 미준비 — Watcher 활성화 생략")
 
     def _move_to_observe(self, location: str, profile: dict) -> bool:
         if self._mc is None:

@@ -235,7 +235,8 @@ def main() -> None:
     global right_mode_idx
 
     parser = argparse.ArgumentParser(description="HSV 필터 디버그 뷰어")
-    parser.add_argument("--udp-port",         type=int,   default=5000)
+    parser.add_argument("--udp-port",         type=int,   default=5000,
+                        help="UDP 수신 포트 (FrontJet=5000, WareJet=5001)")
     parser.add_argument("--hsv-lower",        type=int,   nargs=3, default=None)
     parser.add_argument("--hsv-upper",        type=int,   nargs=3, default=None)
     parser.add_argument("--min-solidity",     type=float, default=None)

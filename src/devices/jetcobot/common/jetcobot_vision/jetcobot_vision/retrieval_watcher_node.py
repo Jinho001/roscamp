@@ -26,6 +26,7 @@ RetrievalWatcherNode
 
 서비스:
   ~/reset_slot  [std_srvs/SetBool]  FMS 회수 완료 후 WAITING → IDLE 전체 리셋
+  ~/set_watch   [std_srvs/SetBool]  감시 활성화/비활성화 (true=감시, false=중지)
 """
 
 import threading
@@ -55,7 +56,7 @@ class RetrievalWatcherNode(Node):
         self.declare_parameter("slot_x_end",         562.0)
         self.declare_parameter("slot_x_boundaries",  [167.0, 327.0, 484.0])
         self.declare_parameter("slot_cy_mid",         222.0)
-        self.declare_parameter("fms_url",            "http://192.168.1.4:8000")
+        self.declare_parameter("fms_url",            "http://192.168.1.130:8002")
 
         obb_topic             = self.get_parameter("obb_topic").value
         self._confirm_secs    = float(self.get_parameter("confirm_secs").value)
@@ -65,7 +66,8 @@ class RetrievalWatcherNode(Node):
         self._slot_cy_mid     = float(self.get_parameter("slot_cy_mid").value)
         self._fms_url         = self.get_parameter("fms_url").value
 
-        # 슬롯 상태
+        # 감시 활성화 플래그 — 기본 비활성, vision_pick_place_node가 제어
+        self._watching = False
         self._slot_states:    dict[int, str]   = {i: "IDLE" for i in range(8)}
         self._slot_detect_at: dict[int, float] = {i: 0.0    for i in range(8)}
         self._lock = threading.Lock()
@@ -81,6 +83,8 @@ class RetrievalWatcherNode(Node):
 
         self.create_service(SetBool, "~/reset_slot", self._on_reset_srv,
                             callback_group=_cb)
+        self.create_service(SetBool, "~/set_watch",  self._on_set_watch_srv,
+                            callback_group=_cb)
 
         self.get_logger().info(
             f"RetrievalWatcherNode 시작  confirm={self._confirm_secs}s  "
@@ -90,6 +94,8 @@ class RetrievalWatcherNode(Node):
     # ── OBB 수신 ─────────────────────────────────────────────────────────────
 
     def _on_obb(self, msg: ObbBoxArray) -> None:
+        if not self._watching:
+            return
         now = time.time()
         detected = set()
         for box in msg.boxes:
@@ -151,6 +157,22 @@ class RetrievalWatcherNode(Node):
             self.get_logger().warn(f"[Watcher] slot={slot_id} FMS 알림 실패: {e}")
             with self._lock:
                 self._slot_states[slot_id] = "IDLE"
+
+    # ── 감시 활성화 서비스 ───────────────────────────────────────────────────
+
+    def _on_set_watch_srv(self, req: SetBool.Request, res: SetBool.Response) -> SetBool.Response:
+        """vision_pick_place_node가 pick/place 완료 후 호출.
+        data=true → 감시 시작, data=false → 감시 중지 + 슬롯 DETECTING 리셋
+        """
+        self._watching = req.data
+        if not req.data:
+            with self._lock:
+                for i, state in self._slot_states.items():
+                    if state == "DETECTING":
+                        self._slot_states[i] = "IDLE"
+        self.get_logger().info(f"[Watcher] 감시 {'시작' if req.data else '중지'}")
+        res.success, res.message = True, f"watching={self._watching}"
+        return res
 
     # ── 슬롯 리셋 서비스 ─────────────────────────────────────────────────────
 

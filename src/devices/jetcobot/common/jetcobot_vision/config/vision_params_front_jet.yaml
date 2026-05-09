@@ -1,7 +1,7 @@
-# vision_params.yaml
-# 노드 이름이 launch 파일의 name= 과 반드시 일치해야 합니다.
-# ※ ObbBoxArray 토픽은 메인 PC의 cv_detect_server.py가 발행
-#    HSV/크기 파라미터는 cv_detect_server.py 실행 인자로 전달
+# vision_params_front_jet.yaml
+# FrontJet Pi 전용 파라미터
+# ※ AI 서버(192.168.1.121) cv_detect_server: --udp-port 5000 --port 8081
+# ※ stream_sender: --host 192.168.1.121 --port 5000
 
 coord_transform_node:
   ros__parameters:
@@ -38,40 +38,6 @@ coord_transform_node:
       - -179.37
     z_surface_mm: 95.0
     obb_topic:    "/detect_bridge_node/obb_boxes"
-
-vision_pick_node:
-  ros__parameters:
-    port:                  "/dev/ttyJETCOBOT"
-    baud:                  1000000
-    grasp_roll:            -178.81
-    grasp_pitch:           0.94
-    grasp_yaw_offset:      0.0
-    tcp_offset:
-      - 0.0
-      - 20.0
-      - 110.0
-    pick_z_offset_mm:      20.0
-    detect_timeout_sec:    10.0
-    coord_topic:           "/coord_transform_node/pick_point"
-    coord_enable_service:  "/coord_transform_node/enable"
-    cv_detect_server_url:  "http://192.168.1.121:8081"
-
-vision_place_node:
-  ros__parameters:
-    port:                  "/dev/ttyJETCOBOT"
-    baud:                  1000000
-    grasp_roll:            -178.81
-    grasp_pitch:           0.94
-    grasp_yaw_offset:      0.0
-    tcp_offset:
-      - 0.0
-      - 20.0
-      - 110.0
-    pick_z_offset_mm:      20.0
-    detect_timeout_sec:    10.0
-    coord_topic:           "/coord_transform_node/pick_point"
-    coord_enable_service:  "/coord_transform_node/enable"
-    cv_detect_server_url:  "http://192.168.1.121:8081"
 
 vision_pick_place_node:
   ros__parameters:
