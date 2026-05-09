@@ -10,6 +10,8 @@ tray:                                     # 핑키 적재함 상자 픽업
   z_surface_mm: 90.0
   hsv_lower: [0, 0, 208]
   hsv_upper: [158, 30, 255]
+  min_area: 12000
+  max_area: 40000
   min_w: 110
   max_w: 200
   min_h: 110
@@ -25,6 +27,8 @@ receiving_zone:                           # 회수존(입고존) 상자 픽업
   z_surface_mm: 50.0
   hsv_lower: [0, 0, 208]
   hsv_upper: [158, 30, 255]
+  min_area: 6000
+  max_area: 30000
   min_w: 90
   max_w: 170
   min_h: 90
@@ -45,11 +49,13 @@ warehouse_pick:                           # 창고 고정 위치 픽업 (비전 
 
 # ── Place 프로파일 ─────────────────────────────────────────────────────────────
 
-pinky_tray_place: 
-  observe_pose: [-62.4, -87.9, 314.2, -161.81, 0.94, -179.37] 
+pinky_tray_place:
+  observe_pose: [-62.4, -87.9, 314.2, -161.81, 0.94, -179.37]
   z_surface_mm: 70                     # TODO: 실측 후 입력
   hsv_lower: [0, 0, 208]
   hsv_upper: [158, 30, 255]
+  min_area: 400
+  max_area: 10000
   min_w: 20
   max_w: 100
   min_h: 20

@@ -89,3 +89,13 @@ vision_pick_place_node:
     coord_topic:           "/coord_transform_node/pick_point"
     coord_enable_service:  "/coord_transform_node/enable"
     cv_detect_server_url:  "http://192.168.1.4:8081"
+
+retrieval_watcher_node:
+  ros__parameters:
+    obb_topic:           "/detect_bridge_node/obb_boxes"
+    confirm_secs:        3.0
+    slot_x_start:        86.0    # 슬롯 0 좌측 cx 실측값
+    slot_x_end:         562.0    # 슬롯 3 우측 cx 실측값
+    slot_x_boundaries:  [167.0, 327.0, 484.0]  # 열 경계 cx
+    slot_cy_mid:         222.0   # 상단/하단 구분선 cy
+    fms_url:            "http://192.168.1.4:8000"
