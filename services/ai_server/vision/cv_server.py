@@ -10,10 +10,10 @@ from ultralytics import YOLO
 # =========================
 # 설정
 # =========================
-LISTEN_IP = "0.0.0.0"
+LISTEN_IP = "192.168.1.121"
 LISTEN_PORT = 6006
 
-MAIN_SERVER_IP = "192.168.1.11"   # 메인 서버 IP
+MAIN_SERVER_IP = "192.168.1.120"   # 메인 서버 IP
 MAIN_SERVER_PORT = 8008          # 메인 서버 TCP 결과 수신 포트
 
 MODEL_PATH = "yolo26n.pt"

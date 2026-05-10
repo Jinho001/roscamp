@@ -333,9 +333,10 @@ class YOLOResultServer:
       결과 수신 후 PySide6 관제 UI (CAM_UI_IP:CAM_UI_PORT) 로 동일 데이터를 포워딩한다.
     """
 
-    def __init__(self, listen_ip: str, listen_port: int):
+    def __init__(self, listen_ip: str, listen_port: int, robot_bridge=None):
         self.listen_ip     = listen_ip
         self.listen_port   = listen_port
+        self.robot_bridge  = robot_bridge
         self.latest_seat_status: Optional[list] = None
         self.latest_result: Optional[dict] = None
         self._lock   = threading.Lock()
@@ -418,10 +419,13 @@ class YOLOResultServer:
                     self.latest_result = result
                 logger.info(
                     f"[YOLO 결과 수신] from={addr} "
+                    f"type={result.get('type')} "
                     f"frame_id={result.get('frame_id')} "
-                    f"person_count={result.get('person_count')} "
+                    f"goals={len(result.get('goals') or [])} "
                     f"process_ms={result.get('process_ms')}ms"
                 )
+                if self.robot_bridge is not None:
+                    self.robot_bridge.handle_result(result)
                 self._forward_to_cam_ui(raw_data)
 
         except Exception as e:
@@ -548,6 +552,50 @@ class YOLOClient:
             sock.close()
 
 
+class VisionRobotBridge:
+    """
+    AI vision 결과를 PinkyPro 쪽 ROS2/FMS 명령으로 연결하는 vision 전용 브릿지.
+    기존 fleet API만 사용한다.
+    """
+
+    def __init__(self, robot_id: str = "sshopy2"):
+        self.robot_id = robot_id
+
+    def handle_result(self, result: dict):
+        frame_id = result.get("frame_id")
+        goals = result.get("goals") or []
+
+        if not goals:
+            logger.info(
+                f"[VISION->PINKY] frame_id={frame_id} hand_raise goal 없음 - 명령 없음"
+            )
+            return
+
+        for goal in goals:
+            map_goal = goal.get("map") or {}
+            x = map_goal.get("x")
+            y = map_goal.get("y")
+            theta = map_goal.get("theta", 0.0)
+
+            if x is None or y is None:
+                logger.warning(
+                    f"[VISION->PINKY] frame_id={frame_id} map 좌표 없음: {goal}"
+                )
+                continue
+
+            ok = fleet.goal_pose(self.robot_id, float(x), float(y), float(theta))
+            if ok:
+                logger.warning(
+                    f"[VISION->PINKY] hands_up goal 전송 → robot={self.robot_id} "
+                    f"x={float(x):.3f} y={float(y):.3f} theta={float(theta):.3f}"
+                )
+            else:
+                logger.warning(
+                    f"[VISION->PINKY] robot={self.robot_id} goal_pose 실패 "
+                    f"(연결 상태 확인 필요)"
+                )
+
+
 # ══════════════════════════════════════════════════════════════
 # [5] Moosinsa Service ↔ Top View Camera(TVC) 서버
 #
@@ -556,14 +604,25 @@ class YOLOClient:
 # ══════════════════════════════════════════════════════════════
 
 class CameraUDPServer:
-    def __init__(self, listen_ip="192.168.1.9", listen_port=7007):
+    def __init__(
+        self,
+        listen_ip="192.168.1.120",
+        listen_port=7007,
+        forward_ip="192.168.1.121",
+        forward_port=6006,
+    ):
         self.listen_ip = listen_ip
         self.listen_port = listen_port
+        self.forward_ip = forward_ip
+        self.forward_port = forward_port
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
         self._thread.start()
-        logger.info(f"CameraUDPServer 시작: {self.listen_ip}:{self.listen_port}")
+        logger.info(
+            f"CameraUDPServer 시작: {self.listen_ip}:{self.listen_port} "
+            f"-> AI UDP {self.forward_ip}:{self.forward_port}"
+        )
 
     def _run(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -575,11 +634,23 @@ class CameraUDPServer:
 
                 logger.info(f"[UDP RECV] from={addr}, bytes={len(data)}")
 
-                # 그대로 GUI로 forward
-                self._forward_to_cam_ui(data)
+                # TopViewCamera 패킷을 그대로 AI 서버로 UDP forward
+                self._forward_to_ai_server(data)
 
             except Exception as e:
                 logger.error(f"CameraUDPServer error: {e}")
+
+    def _forward_to_ai_server(self, raw_data: bytes):
+        try:
+            fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            fwd_sock.sendto(raw_data, (self.forward_ip, self.forward_port))
+            fwd_sock.close()
+            logger.info(
+                f"[UDP FORWARD] AI server={self.forward_ip}:{self.forward_port}, "
+                f"bytes={len(raw_data)}"
+            )
+        except Exception as e:
+            logger.warning(f"AI server UDP forward 실패: {e}")
 
     def _forward_to_cam_ui(self, raw_data: bytes):
         try:
@@ -779,7 +850,7 @@ async def lifespan(app: FastAPI):
     각 콜백 함수는 fleet이 stage 전이 시 동기 스레드에서 호출하므로
     asyncio 이벤트가 필요하면 loop.call_soon_threadsafe() 로 감싸야 한다.
     """
-    global _orchestrator, _main_loop
+    global _orchestrator, _main_loop, _yolo_result_server
 
     _main_loop = asyncio.get_running_loop()
     logger.info("Moosinsa Service 시작...")
@@ -795,9 +866,13 @@ async def lifespan(app: FastAPI):
         logger.warning("Moosinsa Service 시작 완료 - M_LLM 연결 불가")
 
     # YOLO 결과 수신 서버 시작 (별도 데몬 스레드)
+    vision_robot_bridge = VisionRobotBridge(
+        robot_id=os.getenv("PINKYPRO_ROBOT_ID", "sshopy2")
+    )
     yolo_result_server = YOLOResultServer(
         listen_ip=os.getenv('YOLO_RESULT_LISTEN_IP'),
         listen_port= int(os.getenv('YOLO_RESULT_LISTEN_PORT')),
+        robot_bridge=vision_robot_bridge,
     )
     yolo_result_server.start()
     _yolo_result_server = yolo_result_server
@@ -812,8 +887,10 @@ async def lifespan(app: FastAPI):
     # Top View Camera 데이터 수신 서버
     # .env 키: CAMERA_LISTEN_IP / CAMERA_LISTEN_PORT  # ★ CHANGED ★
     camera_udp_server = CameraUDPServer(
-        listen_ip=os.getenv('CAM_LISTEN_IP'),
-        listen_port=int(os.getenv('CAM_LISTEN_PORT')),
+        listen_ip= os.getenv('CAM_LISTEN_IP'),
+        listen_port= int(os.getenv('CAM_LISTEN_PORT')),
+        forward_ip=os.getenv("YOLO_SERVER_IP", "192.168.1.121"),
+        forward_port=int(os.getenv("YOLO_SERVER_PORT", "6006")),
     )
     camera_udp_server.start()
 
@@ -1815,8 +1892,8 @@ async def endpoint_kiosk_stock_check(req: KioskStockCheckRequest):
 if __name__ == "__main__":
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8000,
+        host=os.getenv("API_HOST", "192.168.1.120"),
+        port=int(os.getenv("API_PORT", "8005")),
         reload=False,
         log_level="info",
         access_log=True,

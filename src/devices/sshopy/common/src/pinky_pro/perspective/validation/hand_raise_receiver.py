@@ -71,9 +71,13 @@ class HandRaiseReceiver(Node):
         result_future.add_done_callback(self._result_cb)
 
     def _result_cb(self, future):
-        result = future.result().result
-        self.get_logger().info(f"[도착] 이동 완료")
-        self._navigating = False
+        try:
+            future.result()
+            self.get_logger().info("[도착] 이동 완료 — 다음 goal 대기 중")
+        except Exception as e:
+            self.get_logger().warn(f"[도착] 결과 수신 오류: {e}")
+        finally:
+            self._navigating = False
 
 
 def main():
