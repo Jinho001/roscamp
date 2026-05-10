@@ -217,7 +217,9 @@ class PageManager:                                        # ★ CHANGED ★
         self._shoe_api  = ShoeApiClient()     # ★ NEW ★ 상품 데이터 전용 API 클라이언트
         self._cur_page  = None
         self._prev_page = None   # information 닫기 시 복귀 대상
-        self._accumulated_tags: dict = {}    # ★ NEW ★ 검색 누적 태그
+        # [검색누적태그제거] 키오스크는 단발 검색 — 누적 태그 미사용 (React와 동일).
+        # 인스턴스 attribute에 누적 태그를 저장하면 비동기 응답 race condition 발생 가능.
+        self._search_query: str = ""    # 현재 진행 중인 검색 query (응답 매칭 검증용)
 
         # ── 단일 QMainWindow + QStackedWidget ────────────────
         self._window = QMainWindow()                      # ★ CHANGED ★
@@ -393,29 +395,30 @@ class PageManager:                                        # ★ CHANGED ★
         검색 실행 → API 호출 → SearchResultPage 전환.
         먼저 빈 결과로 페이지를 전환(로딩 상태)하고,
         API 응답이 오면 update_results()로 갱신한다.
-        """
-        # 누적 태그는 대화형 다중 검색에서 유지되나,
-        # 키오스크는 단발 검색이므로 매번 초기화
-        self._accumulated_tags = {}
 
+        [검색누적태그제거] 키오스크는 단발 검색이므로 누적 태그 미사용 (React와 동일).
+        [검색레이스가드] 비동기 응답이 도착했을 때 사용자가 이미 다른 query로
+        다시 검색했다면 stale 응답으로 화면을 덮어쓰지 않도록 query 매칭 검증.
+        """
         # 즉시 페이지 전환 (로딩 상태)
+        self._search_query = query
         self._search_result_page.update_results(query=query, results=None)  # [검색로딩]
         self._go(self.SEARCH_RESULT)
 
         # 백그라운드에서 API 호출 → 결과 주입
         def _on_result(data):
+            # [검색레이스가드] 응답 도착 시점의 진행 중인 query와 일치하지 않으면 무시
+            if query != self._search_query:
+                return
             if data:
                 results = normalize_search_results(data)
-                # 누적 태그 갱신 (다음 검색에 활용)
-                self._accumulated_tags = data.get("accumulated_tags", {})
             else:
                 results = []
-            # 현재 search_result 페이지에 있는 경우에만 갱신
             self._search_result_page.update_results(query=query, results=results)
 
         self._shoe_api.search(
             keyword=query,
-            accumulated_tags=self._accumulated_tags,
+            accumulated_tags={},          # 매 검색마다 새 빈 dict — 누적 잔재 차단
             callback=_on_result,
         )
 

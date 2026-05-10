@@ -8,19 +8,28 @@ moosinsa_tryon_delivery.py
 """
 import sys
 import math
+import json
+import os
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QFrame, QPushButton, QSizePolicy
 )
 from PySide6.QtCore import (
-    Qt, QByteArray, QTimer, QPropertyAnimation,
+    Qt, QByteArray, QTimer, QPropertyAnimation, QUrl,
     QEasingCurve, Property, QObject, Signal
 )
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath
 from PySide6.QtSvgWidgets import QSvgWidget
+from PySide6.QtWebSockets import QWebSocket  # [도착WS연동] /ws/kiosk/amr 구독용
 
 # ── Reference resolution ─────────────────────────────────────
 REF_W, REF_H = 1080, 1920
+
+# ── 백엔드 WebSocket URL (kiosk_api_client 와 동일한 env 사용) ──
+# [도착WS연동] AT_TRYZONE 진입 시 KIOSK_AMR_ARRIVE 메시지를 push 받는 채널
+_WS_HOST = os.environ.get("MOOSINSA_SERVICE_HOST", "localhost")
+_WS_PORT = os.environ.get("MOOSINSA_SERVICE_PORT", "8000")
+WS_KIOSK_AMR_URL = f"ws://{_WS_HOST}:{_WS_PORT}/ws/kiosk/amr"
 
 # ── Palette ──────────────────────────────────────────────────
 C_BG       = "#EDE9E3"
@@ -416,6 +425,11 @@ class TryonDeliveryPage(QWidget):             # ★ CHANGED: QMainWindow → QWi
         self._robot_id   = "sshopy2"   # [시착요청연동] update_order 시 갱신
         self._poll_pending = False      # [시착요청연동] 폴링 중복 방지 플래그
 
+        # [도착WS연동] /ws/kiosk/amr 구독용 — KIOSK_AMR_ARRIVE 수신 시 notify_arrived()
+        self._ws: QWebSocket | None = None
+        self._ws_active = False                # 페이지 활성 구간에만 자동 재연결
+        self._ws_reconnect_timer: QTimer | None = None
+
         self.setStyleSheet(f"background:{C_BG};")
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
@@ -480,13 +494,21 @@ class TryonDeliveryPage(QWidget):             # ★ CHANGED: QMainWindow → QWi
         # [시착요청연동] 진행률 폴링 시작
         if self._api:
             self._start_polling()
+        # [도착WS연동] 새 시착 요청 시작 — WS 재연결
+        self._start_ws()
 
     # ── Public API ───────────────────────────────────────────
-    def update_progress(self, traveled: float, total: float):
+    def update_progress(self, traveled: float, total: float, *,
+                        force_arrived: bool = False):
         """
         FMS 데이터로 진행률 갱신.
-        traveled : 이동한 거리
-        total    : 전체 거리
+        traveled      : 이동한 거리
+        total         : 전체 거리
+        force_arrived : 서버의 권위적 도착 신호. True 일 때만 arrive 화면 전환.
+
+        [진행률버그수정] 이전에는 pct >= 0.98 자동 트리거였으나, 서버 progress_pct
+        가 stage 식별번호 기반(stage/12)이라 AT_WAREJET(15) 에서 1.0 으로 튕겨
+        조기 발화하는 버그가 있었음. 도착 판정은 반드시 force_arrived 로만.
         """
         if total <= 0:
             return
@@ -495,21 +517,23 @@ class TryonDeliveryPage(QWidget):             # ★ CHANGED: QMainWindow → QWi
         self._progress_bar.set_progress(pct)
         self._stage_row.update_stage(pct)
 
-        if pct < 0.98:
-            self._status_lbl.setText("SShoopy 가 상품을 가져오는 중이에요..")
-        else:
+        if force_arrived:
             self._status_lbl.setText("SShoopy 가 도착했어요! 상품을 수령해 주세요.")
             if not self._arrived:
                 self._arrived = True
                 # 도착 콜백 — 수령완료 화면으로 자동 전환
                 QTimer.singleShot(1200, self._on_arrived)
+        else:
+            self._status_lbl.setText("SShoopy 가 상품을 가져오는 중이에요..")
 
     def notify_arrived(self):
         """
         백엔드에서 도착 응답을 수신했을 때 직접 호출.
         (폴링 or WebSocket 콜백에서 연결)
         """
-        self.update_progress(1.0, 1.0)
+        self.update_progress(1.0, 1.0, force_arrived=True)
+        # [도착WS연동] 도착했으니 더 이상 push 받을 필요 없음 — WS 정리
+        self._stop_ws()
 
     # ── 진행률 폴링 ──────────────────────────────────────────
 
@@ -540,11 +564,75 @@ class TryonDeliveryPage(QWidget):             # ★ CHANGED: QMainWindow → QWi
                 return
             progress_pct = data.get("progress_pct", 0.0)
             arrived      = data.get("arrived", False)
-            self.update_progress(progress_pct, 1.0)
+            # [진행률버그수정] arrived 플래그를 권위적 도착 신호로 전달.
+            # pct ≥ 0.98 자동 트리거가 제거되었으므로, 서버가 명시적으로
+            # arrived=True 를 줄 때만 arrive 화면 전환된다.
+            self.update_progress(progress_pct, 1.0, force_arrived=arrived)
             if arrived and hasattr(self, "_poll_timer"):
                 self._poll_timer.stop()
 
         self._api.poll_tryon_progress(robot_id, callback=_on_progress)
+
+    # ── 도착 WS 구독 ─────────────────────────────────────────
+
+    def _start_ws(self):
+        """
+        [도착WS연동] /ws/kiosk/amr 에 연결하여 KIOSK_AMR_ARRIVE 수신 시
+        notify_arrived() 를 호출한다. React phone_ui 의 /ws/amr 구독과 동일 패턴.
+        """
+        self._ws_active = True
+        if self._ws is None:
+            self._ws = QWebSocket()
+            self._ws.connected.connect(self._on_ws_connected)
+            self._ws.disconnected.connect(self._on_ws_disconnected)
+            self._ws.textMessageReceived.connect(self._on_ws_message)
+        if self._ws_reconnect_timer is None:
+            self._ws_reconnect_timer = QTimer(self)
+            self._ws_reconnect_timer.setSingleShot(True)
+            self._ws_reconnect_timer.timeout.connect(self._ws_reconnect)
+        else:
+            self._ws_reconnect_timer.stop()
+        # 이미 열린 연결이 있다면 닫고 새로 연결 (robot_id 기준 갱신)
+        self._ws.abort()
+        self._ws.open(QUrl(WS_KIOSK_AMR_URL))
+
+    def _stop_ws(self):
+        """[도착WS연동] WS 정리 — 자동 재연결 비활성화 + 소켓 종료."""
+        self._ws_active = False
+        if self._ws_reconnect_timer is not None:
+            self._ws_reconnect_timer.stop()
+        if self._ws is not None:
+            self._ws.abort()
+
+    def _ws_reconnect(self):
+        """[도착WS연동] 재연결 트리거 — _ws_active 동안에만 동작."""
+        if not self._ws_active or self._arrived:
+            return
+        if self._ws is not None:
+            self._ws.open(QUrl(WS_KIOSK_AMR_URL))
+
+    def _on_ws_connected(self):
+        print(f"[KIOSK WS] connected: {WS_KIOSK_AMR_URL}")
+
+    def _on_ws_disconnected(self):
+        # 도착 전에 끊어진 경우만 1초 후 재연결 (React 클라이언트와 동일 패턴)
+        if self._ws_active and not self._arrived and self._ws_reconnect_timer is not None:
+            self._ws_reconnect_timer.start(1000)
+
+    def _on_ws_message(self, text: str):
+        """[도착WS연동] {type:"KIOSK_AMR_ARRIVE", robot_id, seat_id, product_id} 수신."""
+        try:
+            data = json.loads(text)
+        except Exception:
+            return
+        if data.get("type") != "KIOSK_AMR_ARRIVE":
+            return
+        # 다른 로봇의 도착 알림은 무시 (멀티 로봇 환경 대비)
+        rid = data.get("robot_id")
+        if rid and rid != self._robot_id:
+            return
+        if not self._arrived:
+            self.notify_arrived()
 
     # ── Navigation ───────────────────────────────────────────
     def _go_home(self):

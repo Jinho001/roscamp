@@ -88,6 +88,23 @@ TRYON_STAGE_TO_FRONTJET  = 13  # 회수존 이동 중 (현재 미사용)
 TRYON_STAGE_TO_HOME      = 14  # 홈 복귀 중
 TRYON_STAGE_AT_WAREJET   = 15  # 창고 도착 — ware_jet 동작 중 (sshopy 정지 대기)
 
+# [실로봇연동] 시착 stage 라벨 — schedule UI 표시용
+TRYON_STAGE_LABELS = {
+    TRYON_STAGE_TO_WAREJET:  "창고 이동 중",
+    TRYON_STAGE_AT_WAREJET:  "창고 도착 — ware_jet 동작 중",
+    TRYON_STAGE_TO_TRYZONE:  "시착존 이동 중",
+    TRYON_STAGE_AT_TRYZONE:  "시착존 도착 — 픽업 대기",
+    TRYON_STAGE_TO_FRONTJET: "회수존 이동 중",
+    TRYON_STAGE_TO_HOME:     "홈 복귀 중",
+}
+
+# [실로봇연동] 배달 stage (0~2) — 라벨
+DELIVERY_STAGE_LABELS = {
+    0: "창고 이동 중",
+    1: "매장 이동 중",
+    2: "홈 복귀 중",
+}
+
 
 # ── [Scene 4] 회수 시나리오 웨이포인트 / stage 상수 ──────────────────────────────
 # 배달(0~2)·시착(10~15)과 충돌을 피하기 위해 20번대 사용.
@@ -166,6 +183,8 @@ class InboundTask:
     scan_result:      dict = field(default_factory=dict)         # [1-08] 바코드 스캔 결과
     created_at:       float = field(default_factory=time.time)
     stage_started_at: float = field(default_factory=time.time)
+    # [실로봇연동] 완료/실패 시점 epoch — _complete_inbound/_fail_inbound 에서 세팅
+    completed_at:     Optional[float] = None
     completed:        bool  = False
     error:            Optional[str] = None
 
@@ -182,10 +201,13 @@ class InboundTask:
                  "color": i.color, "quantity": i.quantity}
                 for i in self.items
             ],
-            "scan_result": self.scan_result,
-            "elapsed":     round(time.time() - self.created_at, 1),
-            "completed":   self.completed,
-            "error":       self.error,
+            "scan_result":  self.scan_result,
+            "elapsed":      round(time.time() - self.created_at, 1),
+            # [실로봇연동] 시각 정보 — schedule UI 가 표시
+            "created_at":   self.created_at,
+            "completed_at": self.completed_at,
+            "completed":    self.completed,
+            "error":        self.error,
         }
 
 
@@ -200,6 +222,8 @@ class RetrievalTask:
     product_info:     dict = field(default_factory=dict)  # size/color/quantity/warehouse_pos
     created_at:       float = field(default_factory=time.time)
     stage_started_at: float = field(default_factory=time.time)
+    # [실로봇연동] 완료/실패 시점 epoch — _complete_retrieval/_fail_retrieval 에서 세팅
+    completed_at:     Optional[float] = None
     completed:        bool  = False
     error:            Optional[str] = None
 
@@ -214,6 +238,79 @@ class RetrievalTask:
             "product_id":   self.product_id,
             "product_info": self.product_info,
             "elapsed":      round(time.time() - self.created_at, 1),
+            # [실로봇연동] 시각 정보 — schedule UI 가 표시
+            "created_at":   self.created_at,
+            "completed_at": self.completed_at,
+            "completed":    self.completed,
+            "error":        self.error,
+        }
+
+
+# ── [실로봇연동] [Scene 2] 시착 Task 데이터클래스 ─────────────────────────────────
+@dataclass
+class TryonTask:
+    """시착 task 1건의 상태 — 입고/회수와 동일한 패턴.
+
+    React admin_ui 의 시착 시나리오는 stage 만 보유했지만, schedule UI 에
+    이력을 노출하기 위해 task record 로 누적. 좌석/상품 정보는 참고용.
+    """
+    task_id:          str
+    robot_id:         str
+    stage:            int  = TRYON_STAGE_TO_WAREJET
+    seat_id:          Optional[int] = None
+    product_id:       Optional[str] = None
+    color:            Optional[str] = None
+    size:             Optional[str] = None
+    created_at:       float = field(default_factory=time.time)
+    stage_started_at: float = field(default_factory=time.time)
+    completed_at:     Optional[float] = None
+    completed:        bool  = False
+    error:            Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id":      self.task_id,
+            "robot_id":     self.robot_id,
+            "stage":        self.stage,
+            "stage_label":  TRYON_STAGE_LABELS.get(
+                self.stage, "완료" if self.completed else "알 수 없음"
+            ),
+            "seat_id":      self.seat_id,
+            "product_id":   self.product_id,
+            "color":        self.color,
+            "size":         self.size,
+            "elapsed":      round(time.time() - self.created_at, 1),
+            "created_at":   self.created_at,
+            "completed_at": self.completed_at,
+            "completed":    self.completed,
+            "error":        self.error,
+        }
+
+
+# ── [실로봇연동] 배달 Task 데이터클래스 ───────────────────────────────────────────
+@dataclass
+class DeliveryTask:
+    """배달 task 1건의 상태 — 입고/회수와 동일한 패턴."""
+    task_id:          str
+    robot_id:         str
+    stage:            int  = 0   # 0: 창고 / 1: 매장 / 2: 홈
+    created_at:       float = field(default_factory=time.time)
+    stage_started_at: float = field(default_factory=time.time)
+    completed_at:     Optional[float] = None
+    completed:        bool  = False
+    error:            Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id":      self.task_id,
+            "robot_id":     self.robot_id,
+            "stage":        self.stage,
+            "stage_label":  DELIVERY_STAGE_LABELS.get(
+                self.stage, "완료" if self.completed else "알 수 없음"
+            ),
+            "elapsed":      round(time.time() - self.created_at, 1),
+            "created_at":   self.created_at,
+            "completed_at": self.completed_at,
             "completed":    self.completed,
             "error":        self.error,
         }
@@ -236,6 +333,8 @@ class _RobotState:
         # 배달 시나리오 상태
         self.delivery_stage: int | None = None
         self._last_arrival_time: float  = 0.0   # 중복 도착 방지용
+        # [실로봇연동] 진행 중인 배달 task ID — _tryon_tasks 와 같은 패턴
+        self.delivery_task_id: Optional[str] = None
 
         # 시착 시나리오 (Scene 2) 상태
         self.tryon_stage: int | None    = None    # TRYON_STAGE_* 상수
@@ -243,6 +342,8 @@ class _RobotState:
         self.tryon_product_id: str | None = None
         self.tryon_color: str | None    = None
         self.tryon_size: str | None     = None
+        # [실로봇연동] 진행 중인 시착 task ID — 시나리오 종료 시 None
+        self.tryon_task_id: Optional[str] = None
 
         # nav2 도착 판정용 — SUCCEEDED 액션 신호와 거리 둘 다 만족해야 도착 처리
         self._goal_sent_time:    float = 0.0   # 마지막 goal_pose 발행 시각
@@ -325,6 +426,34 @@ class RobotManager:
         self._retrieval_tasks:   dict[str, RetrievalTask] = {}  # task_id → task
         self._retrieval_counter: int                       = 0
         self._retrieval_lock = threading.Lock()
+
+        # ── [실로봇연동] [Scene 2] 시착 task 관리 (in-memory dict) ────────────
+        # 입고/회수와 동일한 패턴: counter 로 task_id 발급, dict 에 누적,
+        # 완료/취소 시에도 dict 에서 제거하지 않고 completed=True 마킹만.
+        self._tryon_tasks:   dict[str, TryonTask] = {}
+        self._tryon_counter: int                  = 0
+        self._tryon_lock = threading.Lock()
+
+        # ── [실로봇연동] 배달 task 관리 (in-memory dict) ─────────────────────
+        self._delivery_tasks:   dict[str, DeliveryTask] = {}
+        self._delivery_counter: int                     = 0
+        self._delivery_lock = threading.Lock()
+
+        # ── [실로봇연동] per-robot 로그 버퍼 — 로그확인 버튼이 사용 ──────────
+        # deque(maxlen=200) 로 로봇당 최근 200건의 (timestamp, msg) 만 보관.
+        # _log(robot_id, msg) 가 lifecycle 핵심 이벤트마다 호출됨 + console print.
+        self._robot_logs:      dict[str, deque] = {
+            rid: deque(maxlen=200) for rid in ROBOTS.keys()
+        }
+        self._robot_logs_lock = threading.Lock()
+
+        # ── [실로봇연동] 대시보드 KPI 보조 카운터 ─────────────────────────────
+        # 모두 프로세스 메모리 — 서버 재시작 시 0 으로 리셋.
+        # _retrieval_zone_box_count: 회수존(top view cam) 박스 인식 개수 (현재 시점).
+        # _retrieval_completed_count: 입고 시 stock 0→1 전이가 일어난 누적 상품 개수.
+        self._retrieval_zone_box_count:  int = 0
+        self._retrieval_completed_count: int = 0
+        self._dashboard_lock = threading.Lock()
 
         # ── [Scene 1] 입고 완료 콜백 — moosinsa_service.py에서 등록 ──────────
         # stage 변경 및 task 완료 시 호출되어 서비스 레이어에서 후속 처리 가능
@@ -540,12 +669,160 @@ class RobotManager:
         if not self._is_robot_idle(state):
             print(f"[fleet] start_delivery 거절: {robot_id} 다른 시나리오 진행 중")
             return False
+        # [실로봇연동] task record 생성 — 입고/회수와 동일 패턴
+        with self._delivery_lock:
+            self._delivery_counter += 1
+            task_id = f"DLV-{self._delivery_counter:04d}"
+            task = DeliveryTask(task_id=task_id, robot_id=robot_id, stage=0)
+            self._delivery_tasks[task_id] = task
+
         state.delivery_stage = 0
+        state.delivery_task_id = task_id   # [실로봇연동]
         state._last_arrival_time = 0.0
         wp = WAYPOINTS[0]
-        print(f"[fleet] {robot_id} 배달 시작 → stage 0 창고 ({wp['x']}, {wp['y']})")
+        # [실로봇연동] 콘솔 + per-robot 로그 버퍼 동시 기록
+        self._log(robot_id, f"(배달) 시작 {task_id} → stage 0 창고 ({wp['x']}, {wp['y']})")
+        # MOOsinsa 서버에 배달 시작 알림 (origin/develop 에서 추가됨)
         self._post_delivery_status(state, "쇼피가 고객님께서 요청하신 신발을 찾으러 가고 있어요.")
         return self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
+
+    # ── [실로봇연동] 시착/배달 stage·완료 갱신 헬퍼 ───────────────────────
+    # state.tryon_stage / delivery_stage 전이와 task record 갱신을 한 곳에 묶는다.
+    # 직접 state 만 갱신하는 기존 호출 사이트들을 이 헬퍼로 교체 — task 누락 방지.
+
+    def _set_tryon_stage(self, state: _RobotState, new_stage: int):
+        state.tryon_stage = new_stage
+        tid = state.tryon_task_id
+        if tid:
+            task = self._tryon_tasks.get(tid)
+            if task:
+                task.stage = new_stage
+                task.stage_started_at = time.time()
+        # [실로봇연동] 로그 기록
+        label = TRYON_STAGE_LABELS.get(new_stage, f"stage {new_stage}")
+        self._log(state.robot_id, f"(시착) → {label}")
+
+    def _set_delivery_stage(self, state: _RobotState, new_stage: int):
+        state.delivery_stage = new_stage
+        tid = state.delivery_task_id
+        if tid:
+            task = self._delivery_tasks.get(tid)
+            if task:
+                task.stage = new_stage
+                task.stage_started_at = time.time()
+        # [실로봇연동] 로그 기록
+        label = DELIVERY_STAGE_LABELS.get(new_stage, f"stage {new_stage}")
+        self._log(state.robot_id, f"(배달) → {label}")
+
+    def _finish_tryon_task(self, state: _RobotState, error: Optional[str] = None):
+        """[실로봇연동] 시착 task record 종료 — completed/error/completed_at 기록.
+        깨끗하게 완료된 경우만 stage=-1 sentinel 처리 (to_dict 가 '완료' 로 폴백).
+        실패/취소 시에는 어느 stage 에서 멈췄는지 보이도록 stage 유지.
+        """
+        tid = state.tryon_task_id
+        if tid:
+            task = self._tryon_tasks.get(tid)
+            if task and not task.completed:
+                task.completed    = True
+                task.completed_at = time.time()
+                if error:
+                    task.error = error
+                else:
+                    task.stage = -1
+                # [실로봇연동] 로그
+                self._log(
+                    state.robot_id,
+                    f"(시착) {tid} {'실패: ' + error if error else '완료'}"
+                )
+        state.tryon_task_id = None
+
+    def _finish_delivery_task(self, state: _RobotState, error: Optional[str] = None):
+        """[실로봇연동] 배달 task record 종료 — completed/error/completed_at 기록.
+        깨끗하게 완료된 경우만 stage=-1 sentinel 처리.
+        """
+        tid = state.delivery_task_id
+        if tid:
+            task = self._delivery_tasks.get(tid)
+            if task and not task.completed:
+                task.completed    = True
+                task.completed_at = time.time()
+                if error:
+                    task.error = error
+                else:
+                    task.stage = -1
+                # [실로봇연동] 로그
+                self._log(
+                    state.robot_id,
+                    f"(배달) {tid} {'실패: ' + error if error else '완료'}"
+                )
+        state.delivery_task_id = None
+
+    # ── [실로봇연동] per-robot 로그 ────────────────────────────────────────
+    def _log(self, robot_id: str, msg: str):
+        """[실로봇연동] per-robot 이벤트 로그 — deque 적재 + console print.
+
+        monitoring_ui 의 '로그확인' 버튼이 get_robot_log() 로 조회.
+        기존 `print(f"[fleet] {robot_id} ...")` 호출은 유지 (콘솔 디버깅용).
+        """
+        ts = time.time()
+        with self._robot_logs_lock:
+            buf = self._robot_logs.get(robot_id)
+            if buf is None:
+                buf = deque(maxlen=200)
+                self._robot_logs[robot_id] = buf
+            buf.append((ts, msg))
+        print(f"[fleet] {robot_id} {msg}")
+
+    def get_robot_log(self, robot_id: str, limit: int = 50) -> list:
+        """[실로봇연동] 로봇 로그 조회 — 최신 limit 건을 시간순(오래된→최신)으로 반환."""
+        with self._robot_logs_lock:
+            buf = self._robot_logs.get(robot_id)
+            if not buf:
+                return []
+            items = list(buf)
+        if limit and limit < len(items):
+            items = items[-limit:]
+        return [{"ts": ts, "msg": msg} for ts, msg in items]
+
+    # ── [실로봇연동] 대시보드 KPI 보조 메서드 ──────────────────────────────
+    def get_total_started_requests(self) -> int:
+        """[실로봇연동] 프로세스 시작 후 누적된 모든 시나리오 task 수.
+
+        시착/배달/입고/회수의 task counter 합 — 메모리 dict 기반이므로
+        서버 재시작 시 0 으로 리셋되는 사용자 명세에 부합.
+        """
+        return (
+            self._inbound_counter
+            + self._retrieval_counter
+            + self._tryon_counter
+            + self._delivery_counter
+        )
+
+    def get_retrieval_zone_box_count(self) -> int:
+        """[실로봇연동] 회수존 top view cam 이 인식한 박스 개수 (현재 시점)."""
+        with self._dashboard_lock:
+            return self._retrieval_zone_box_count
+
+    def set_retrieval_zone_box_count(self, count: int) -> int:
+        """[실로봇연동] 회수존 박스 개수 갱신 — top view cam 서비스가 push.
+        반환: 갱신된 값.
+        """
+        with self._dashboard_lock:
+            self._retrieval_zone_box_count = max(0, int(count))
+            return self._retrieval_zone_box_count
+
+    def get_retrieval_completed_count(self) -> int:
+        """[실로봇연동] stock 0→1 전이가 일어난 누적 상품 개수."""
+        with self._dashboard_lock:
+            return self._retrieval_completed_count
+
+    def increment_retrieval_completed(self, count: int = 1) -> int:
+        """[실로봇연동] 회수 완료(=stock 0→1) 카운터 증가 — DB 갱신 컴포넌트가 호출.
+        반환: 갱신된 누적 값.
+        """
+        with self._dashboard_lock:
+            self._retrieval_completed_count += max(0, int(count))
+            return self._retrieval_completed_count
 
     def _check_arrival(self, state: _RobotState):
         """
@@ -659,7 +936,7 @@ class RobotManager:
             # 창고 도착 → AT_WAREJET 으로 전환 (sshopy 정지 대기)
             #   1) ware_jet 그리퍼 동작 → 완료 대기
             #   2) 끝나면 시착존 N 으로 출발
-            state.tryon_stage = TRYON_STAGE_AT_WAREJET
+            self._set_tryon_stage(state, TRYON_STAGE_AT_WAREJET)  # [실로봇연동]
             print(f"[fleet] {robot_id} (시착) 창고 도착 → ware_jet 그리퍼 동작 시작 (sshopy 대기)")
             # self._post_delivery_status(state,"쇼피가 창고로 이동중 입니다.")  # 창고 도착 POST (시착존 출발은 ware_jet 완료 후)
 
@@ -668,7 +945,7 @@ class RobotManager:
                 print(f"[fleet] {robot_id} (시착) ware_jet 완료 (ok={ok})")
                 # sshopy 시착존으로 출발
                 if state.tryon_stage == TRYON_STAGE_AT_WAREJET:  # 중간 cancel 체크
-                    state.tryon_stage = TRYON_STAGE_TO_TRYZONE
+                    self._set_tryon_stage(state, TRYON_STAGE_TO_TRYZONE)  # [실로봇연동]
                     state._last_arrival_time = time.time()
                     wp = TRYZONES[state.tryon_seat]
                     self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
@@ -681,11 +958,11 @@ class RobotManager:
 
         elif s == TRYON_STAGE_TO_TRYZONE:
             # 시착존 도착 → 고객 픽업 대기 (complete_pickup 호출까지)
-            state.tryon_stage = TRYON_STAGE_AT_TRYZONE
+            self._set_tryon_stage(state, TRYON_STAGE_AT_TRYZONE)  # [실로봇연동]
             print(f"[fleet] {robot_id} (시착) 시착존 {state.tryon_seat} 도착 — 고객 수령 대기")
             # NOTE: '도착' 이벤트는 /ws/robots WS push로 phone_ui가 자동 감지
             self._post_arrive(state)
-            
+
 
         elif s == TRYON_STAGE_TO_FRONTJET:
             # 회수존 도착 → front_jet 그리퍼 → 홈 복귀
@@ -695,13 +972,15 @@ class RobotManager:
                 args=("front_jet", self._FRONT_JET_SCRIPT),
                 daemon=True,
             ).start()
-            state.tryon_stage = TRYON_STAGE_TO_HOME
+            self._set_tryon_stage(state, TRYON_STAGE_TO_HOME)  # [실로봇연동]
             wp = tryon_home(robot_id)
             self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
             print(f"[fleet] {robot_id} (시착) → 홈 복귀")
 
         elif s == TRYON_STAGE_TO_HOME:
             # 홈 도착 → 시착 시나리오 종료
+            # [실로봇연동] task record 종료(completed=True, completed_at=now) 우선 처리
+            self._finish_tryon_task(state)
             state.tryon_stage      = None
             state.tryon_seat       = None
             state.tryon_product_id = None
@@ -722,7 +1001,7 @@ class RobotManager:
                 args=("ware_jet", self._GRIPPER_SCRIPT),
                 daemon=True,
             ).start()
-            state.delivery_stage = 1
+            self._set_delivery_stage(state, 1)  # [실로봇연동]
             wp = WAYPOINTS[1]
             self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
             print(f"[fleet] {robot_id} → stage 1 매장 ({wp['x']}, {wp['y']})")
@@ -735,13 +1014,15 @@ class RobotManager:
                 args=("front_jet", self._FRONT_JET_SCRIPT),
                 daemon=True,
             ).start()
-            state.delivery_stage = 2
+            self._set_delivery_stage(state, 2)  # [실로봇연동]
             wp = WAYPOINTS[2]
             self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
             print(f"[fleet] {robot_id} → stage 2 홈 복귀")
 
         elif stage == 2:
             # 홈 도착 → 배달 완료
+            # [실로봇연동] task record 종료
+            self._finish_delivery_task(state)
             state.delivery_stage = None
             print(f"[fleet] {robot_id} 홈 복귀 완료 — 배달 시나리오 종료")
 
@@ -825,21 +1106,35 @@ class RobotManager:
                 return False, f"좌석 {seat_id} 이미 사용 중"
             self._seat_occupied[seat_id] = True
 
+        # [실로봇연동] task record 생성 — 입고/회수와 동일 패턴
+        with self._tryon_lock:
+            self._tryon_counter += 1
+            task_id = f"TRY-{self._tryon_counter:04d}"
+            task = TryonTask(
+                task_id=task_id, robot_id=robot_id,
+                stage=TRYON_STAGE_TO_WAREJET,
+                seat_id=seat_id, product_id=product_id,
+                color=color, size=size,
+            )
+            self._tryon_tasks[task_id] = task
+
         # 시착 상태 초기화
         state.tryon_stage      = TRYON_STAGE_TO_WAREJET
         state.tryon_seat       = seat_id
         state.tryon_product_id = product_id
         state.tryon_color      = color
         state.tryon_size       = size
+        state.tryon_task_id    = task_id   # [실로봇연동]
         # 5초 쿨다운 시작 — 로봇이 이미 목표 근처에 있을 때 즉시 도착 트리거 방지
         state._last_arrival_time = time.time()
 
         # 창고로 출발
         wp = TRYON_WAREJET
         ok = self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
-        print(
-            f"[fleet] {robot_id} 시착 시작 → 창고 "
-            f"(seat={seat_id}, product={product_id}, color={color}, size={size})"
+        # [실로봇연동] 로그
+        self._log(
+            robot_id,
+            f"(시착) 시작 {task_id} → 창고 (seat={seat_id}, product={product_id})"
         )
         return ok, "ok"
 
@@ -868,7 +1163,8 @@ class RobotManager:
                 self._seat_occupied[seat_id] = False
 
         # 홈/대기위치로 직접 복귀
-        state.tryon_stage = TRYON_STAGE_TO_HOME
+        # [실로봇연동] state.tryon_stage 직접 대입 대신 helper 호출 — task record stage 도 함께 갱신
+        self._set_tryon_stage(state, TRYON_STAGE_TO_HOME)
         wp = tryon_home(robot_id)
         ok = self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
         print(f"[fleet] {robot_id} 수령 완료 → 홈/대기위치 복귀 (seat {seat_id} 해제)")
@@ -893,6 +1189,8 @@ class RobotManager:
         if seat_id is not None:
             with self._seat_lock:
                 self._seat_occupied[seat_id] = False
+        # [실로봇연동] task record 종료 — '취소' 사유 기록
+        self._finish_tryon_task(state, error="취소")
         state.tryon_stage      = None
         state.tryon_seat       = None
         state.tryon_product_id = None
@@ -910,6 +1208,8 @@ class RobotManager:
         state = self._states.get(robot_id)
         if not state:
             return False
+        # [실로봇연동] task record 종료 — '취소' 사유 기록
+        self._finish_delivery_task(state, error="취소")
         state.delivery_stage = None
         if state.pose:
             self.goal_pose(robot_id, state.pose["x"], state.pose["y"], 0.0)
@@ -1006,7 +1306,8 @@ class RobotManager:
             self._fail_inbound(task, "입고 위치 이동 명령 실패")
             return False, "이동 명령 실패", task_id
 
-        print(f"[fleet] (입고) {task_id} 시작 → {assigned} 입고 위치 이동 items={len(inbound_items)}개")
+        # [실로봇연동] 로그
+        self._log(assigned, f"(입고) 시작 {task_id} → 입고 위치 이동 items={len(inbound_items)}개")
         return True, "ok", task_id
 
     def notify_scan_complete(self, task_id: str, scan_result: dict) -> tuple[bool, str]:
@@ -1201,15 +1502,17 @@ class RobotManager:
             5. _process_inbound_queue() 호출 — 대기열 자동 시작 [TC 1-14]
         출력: 없음
         """
-        task.completed = True
-        task.stage     = -1
+        task.completed    = True
+        task.completed_at = time.time()  # [실로봇연동] 완료 시각 기록
+        task.stage        = -1
         with self._inbound_lock:
             self._inbound_robot_tasks.pop(task.robot_id, None)
         state = self._states.get(task.robot_id)
         if state:
             state.inbound_stage   = None
             state.inbound_task_id = None
-        print(f"[fleet] (입고) {task.task_id} 완료 — {task.robot_id} idle")
+        # [실로봇연동] 로그
+        self._log(task.robot_id, f"(입고) {task.task_id} 완료 — idle")
         # 완료 콜백 발행 — moosinsa_service에서 등록 시 실행
         if self.on_inbound_complete:
             try:
@@ -1229,15 +1532,17 @@ class RobotManager:
             3. state.inbound_stage, inbound_task_id를 None으로 초기화 (로봇 idle 복원)
         출력: 없음
         """
-        task.error     = reason
-        task.completed = True
+        task.error        = reason
+        task.completed    = True
+        task.completed_at = time.time()  # [실로봇연동] 실패 시각도 기록
         with self._inbound_lock:
             self._inbound_robot_tasks.pop(task.robot_id, None)
         state = self._states.get(task.robot_id)
         if state:
             state.inbound_stage   = None
             state.inbound_task_id = None
-        print(f"[fleet] (입고) {task.task_id} 실패: {reason}")
+        # [실로봇연동] 로그
+        self._log(task.robot_id, f"(입고) {task.task_id} 실패: {reason}")
 
     def _process_inbound_queue(self):
         """[TC 1-14] 대기열에서 다음 입고 task를 꺼내 자동 시작."""
@@ -1303,7 +1608,8 @@ class RobotManager:
             self._fail_retrieval(task, "입구 카운터 이동 명령 실패")
             return False, "이동 명령 실패", task_id
 
-        print(f"[fleet] (회수) {task_id} 시작 → {robot_id} 입구 카운터 이동 ({wp['x']}, {wp['y']})")
+        # [실로봇연동] 로그
+        self._log(robot_id, f"(회수) 시작 {task_id} → 입구 카운터 이동")
         return True, "ok", task_id
 
     def identify_product(
@@ -1393,7 +1699,9 @@ class RobotManager:
             self.cmd_vel(task.robot_id, 0.0, 0.0)
             if state.pose:
                 self.goal_pose(task.robot_id, state.pose["x"], state.pose["y"], 0.0)
-        print(f"[fleet] (회수) {task_id} 취소됨")
+        # [실로봇연동] 로그 (취소된 task 의 robot_id 가 task 객체에 있음)
+        if task and task.robot_id:
+            self._log(task.robot_id, f"(회수) {task_id} 취소")
         return True, "ok"
 
     def cancel_retrieval_by_robot(self, robot_id: str) -> bool:
@@ -1427,6 +1735,13 @@ class RobotManager:
         출력: [RetrievalTask.to_dict(), ...] — 완료/진행 중/실패 포함 전체 목록
         """
         return [t.to_dict() for t in self._retrieval_tasks.values()]
+
+    # [실로봇연동] 시착/배달 task 전체 목록 — schedule UI 가 사용
+    def get_all_tryon_tasks(self) -> list:
+        return [t.to_dict() for t in self._tryon_tasks.values()]
+
+    def get_all_delivery_tasks(self) -> list:
+        return [t.to_dict() for t in self._delivery_tasks.values()]
 
     def _retrieval_target(self, state: _RobotState) -> Optional[dict]:
         """현재 회수 stage의 목표 웨이포인트 반환. 팔 작업·대기 단계는 None."""
@@ -1541,13 +1856,15 @@ class RobotManager:
             3. on_retrieval_complete 콜백 발행 (moosinsa_service에 등록됨)
         출력: 없음
         """
-        task.completed = True
-        task.stage     = -1
+        task.completed    = True
+        task.completed_at = time.time()  # [실로봇연동] 완료 시각 기록
+        task.stage        = -1
         state = self._states.get(task.robot_id)
         if state:
             state.retrieval_stage   = None
             state.retrieval_task_id = None
-        print(f"[fleet] (회수) {task.task_id} 완료 — {task.robot_id} 홈 도착")
+        # [실로봇연동] 로그
+        self._log(task.robot_id, f"(회수) {task.task_id} 완료 — 홈 도착")
         # 완료 콜백 발행 — moosinsa_service에서 등록 시 실행
         if self.on_retrieval_complete:
             try:
@@ -1564,13 +1881,15 @@ class RobotManager:
             2. state.retrieval_stage, retrieval_task_id를 None으로 초기화 (로봇 idle 복원)
         출력: 없음
         """
-        task.error     = reason
-        task.completed = True
+        task.error        = reason
+        task.completed    = True
+        task.completed_at = time.time()  # [실로봇연동] 실패 시각도 기록
         state = self._states.get(task.robot_id)
         if state:
             state.retrieval_stage   = None
             state.retrieval_task_id = None
-        print(f"[fleet] (회수) {task.task_id} 실패: {reason}")
+        # [실로봇연동] 로그
+        self._log(task.robot_id, f"(회수) {task.task_id} 실패: {reason}")
 
     def _check_retrieval_timeouts(self):
         """회수 task timeout 감시 — _reconnect_loop에서 RECONNECT_INTERVAL마다 호출."""
