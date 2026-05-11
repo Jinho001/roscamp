@@ -133,19 +133,13 @@ class ApiClient(QObject):
     def robot_log(self, robot_name: str, limit: int = 50) -> dict:
         return self._get(f"/api/robot/{robot_name}/log?limit={int(limit)}")
 
-    def inbound_start(
-        self,
-        robot_id: str | None = None,
-        items: list[dict] | None = None,
-    ) -> dict:
-        # [실로봇연동] React /inbound/start 와 동일한 페이로드 ({robot_id, items}).
-        # robot_id=None 이면 fleet 가 idle 핑키 자동 배정.
-        # items 각 원소: {product_id: str, size: int, color: str, quantity: int}.
+    def inbound_start(self, robot_ids: list[str] | None = None) -> dict:
+        # [실로봇연동][다중로봇dispatcher] 다중-sshopy 입고 시나리오 시작.
+        # React admin_ui /inbound_demo/start 와 동일 — fleet.inbound_demo.start(robot_ids).
+        # robot_ids 미지정 시 백엔드 기본값 ["sshopy2","sshopy1","sshopy3"] 사용.
         payload: dict = {}
-        if robot_id:
-            payload["robot_id"] = robot_id
-        if items:
-            payload["items"] = items
+        if robot_ids:
+            payload["robot_ids"] = robot_ids
         return self._post("/api/inbound/start", payload)
 
     def emergency_stop(self) -> dict:
