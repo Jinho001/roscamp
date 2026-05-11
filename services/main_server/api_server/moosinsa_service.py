@@ -1631,8 +1631,8 @@ class KioskPageEvent(BaseModel):                          # ★ NEW ★
 
 _STORE_INFO = {                                           # ★ NEW ★
     "hours": [
-        {"label": "평일",  "time": "10:00 – 21:00"},
-        {"label": "주말",  "time": "10:00 – 22:00"},
+        {"label": "평일",  "time": "10:00 ~ 21:00"},
+        {"label": "주말",  "time": "10:00 ~ 22:00"},
     ],
     "closed": [
         "매월 첫째 월요일 정기 휴무",
