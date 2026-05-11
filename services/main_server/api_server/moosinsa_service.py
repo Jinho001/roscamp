@@ -2140,9 +2140,10 @@ class _AdminRobotStartReq(BaseModel):
 
 
 class _AdminInboundStartReq(BaseModel):
-    # admin GUI 의 '입고 시작' 버튼은 본문 없이 호출 — 데모용 기본 1건 입고 트리거
-    robot_id: Optional[str] = None
-    items:    Optional[list] = None
+    # [실로봇연동][다중로봇dispatcher] admin GUI '입고 시작' 버튼 → fleet.inbound_demo.start(robot_ids).
+    # React admin_ui 의 /inbound_demo/start 와 동일 페이로드. FrontJet/창고존/서브존 mutex 로 직렬화.
+    # 우선순위 순서 (앞에 있을수록 FrontJet 락 먼저 획득). 미지정 시 백엔드 기본값.
+    robot_ids: list[str] = ["sshopy2", "sshopy1", "sshopy3"]
 
 
 # ── [monitoring_ui] 엔드포인트 ─────────────────────────────────────────────────
@@ -2447,14 +2448,18 @@ async def api_robot_manual(name: str):
 
 @app.post("/api/inbound/start")
 async def api_inbound_start(req: Optional[_AdminInboundStartReq] = None):
+    """[실로봇연동][다중로봇dispatcher] 입고 시작 버튼.
+
+    React admin_ui 의 /inbound_demo/start 와 동일한 다중-sshopy 입고 dispatcher
+    호출. fleet.inbound_demo (InboundDemoOrchestrator) 가 FrontJet/창고존/서브존
+    ResourceLock 으로 직렬화해 HOME → FrontJet → 창고존 → 서브존 → HOME 흐름을
+    각 sshopy 별 worker thread 로 진행한다.
+
+    body 미지정 시 기본값 ["sshopy2","sshopy1","sshopy3"] 사용 (React 와 동일).
     """
-    [monitoring_ui] 입고 시작 버튼 — 본문 없이도 호출 가능 (items=[] 데모).
-    실제 운용 시 admin GUI 에서 입고할 상품 목록을 전달하도록 확장 필요.
-    """
-    items = req.items if req and req.items else []
-    rid   = req.robot_id if req else None
-    ok, msg, task_id = fleet.start_inbound(items=items, robot_id=rid)
-    return {"ok": ok, "message": msg, "task_id": task_id}
+    rids = (req.robot_ids if req else None) or ["sshopy2", "sshopy1", "sshopy3"]
+    ok, msg = fleet.inbound_demo.start(rids)
+    return {"ok": ok, "message": msg, "robot_ids": rids}
 
 
 @app.post("/api/emergency/stop")

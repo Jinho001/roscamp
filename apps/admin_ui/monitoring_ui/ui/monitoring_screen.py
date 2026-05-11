@@ -7,9 +7,8 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QTableWidget, QTableWidgetItem, QPushButton, QComboBox,
     QHeaderView, QSizePolicy, QScrollArea,
-    # [실로봇연동] 로그확인 / 입고 시작 다이얼로그용
-    QDialog, QPlainTextEdit, QMessageBox, QLineEdit, QSpinBox,
-    QDialogButtonBox, QFormLayout,
+    # [실로봇연동] 로그확인 다이얼로그 / 결과 메시지박스용
+    QDialog, QPlainTextEdit, QMessageBox,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui  import QColor, QFont
@@ -28,67 +27,10 @@ STATUS_STYLE = {
 
 ROBOT_NAMES = ["Sshopy 1", "Sshopy 2", "Sshopy 3", "FrontJet", "WareJet"]
 
-# [실로봇연동] 입고 시작 다이얼로그 — React 의 inbound_stage==null 입력 폼과 동등.
-# 페이로드: {robot_id?, items: [{product_id, size, color, quantity}]} (1건만 입력).
-class InboundStartDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("입고 시작")
-        self.setModal(True)
-        self.resize(360, 220)
-
-        form = QFormLayout()
-        form.setContentsMargins(16, 16, 16, 8)
-        form.setSpacing(8)
-
-        # 로봇 — '(자동 배정)' 또는 Sshopy N. userData 는 백엔드 fleet 가 사용하는
-        # raw robot_id (sshopy1/2/3) — React 가 보내는 값과 동일.
-        self.cmb_robot = QComboBox()
-        self.cmb_robot.addItem("(자동 배정)", userData=None)
-        for label, rid in (("Sshopy 1", "sshopy1"),
-                            ("Sshopy 2", "sshopy2"),
-                            ("Sshopy 3", "sshopy3")):
-            self.cmb_robot.addItem(label, userData=rid)
-        form.addRow("로봇", self.cmb_robot)
-
-        self.le_product = QLineEdit()
-        self.le_product.setPlaceholderText("예: PROD-001")
-        form.addRow("상품 ID", self.le_product)
-
-        self.sb_size = QSpinBox()
-        self.sb_size.setRange(200, 320)
-        self.sb_size.setValue(270)
-        self.sb_size.setSuffix(" mm")
-        form.addRow("사이즈", self.sb_size)
-
-        self.le_color = QLineEdit()
-        self.le_color.setPlaceholderText("예: black")
-        form.addRow("색상", self.le_color)
-
-        self.sb_qty = QSpinBox()
-        self.sb_qty.setRange(1, 50)
-        self.sb_qty.setValue(1)
-        form.addRow("수량", self.sb_qty)
-
-        root = QVBoxLayout(self)
-        root.addLayout(form)
-        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.button(QDialogButtonBox.Ok).setText("입고 시작")
-        bb.button(QDialogButtonBox.Cancel).setText("취소")
-        bb.accepted.connect(self.accept)
-        bb.rejected.connect(self.reject)
-        root.addWidget(bb)
-
-    def payload(self) -> tuple[str | None, list[dict]]:
-        """선택값을 (robot_id, items) 형태로 반환."""
-        rid = self.cmb_robot.currentData()
-        item = {
-            "product_id": self.le_product.text().strip() or "admin-ui-demo",
-            "size":       int(self.sb_size.value()),
-            "color":      self.le_color.text().strip(),
-            "quantity":   int(self.sb_qty.value()),
-        }
-        return rid, [item]
+# [실로봇연동][다중로봇dispatcher] 입고 시작 버튼은 fleet.inbound_demo.start() 호출 —
+# 별도 입력 폼 없이 클릭만으로 다중 sshopy 입고 시나리오 dispatch.
+# (이전엔 InboundStartDialog 로 robot/product/size/color/quantity 받았으나,
+#  React admin_ui 의 '입고 시나리오 시작' 패턴 따라 단순화)
 
 
 # [실로봇연동] 로봇별 선택 가능한 task 리스트 — React admin_ui 가 트리거 가능한 task 와 동치.
@@ -487,15 +429,11 @@ class MonitoringScreen(QWidget):
         dlg.exec()
 
     def _on_inbound(self):
-        # [실로봇연동] React /inbound/start 와 동일 페이로드를 만들어 호출.
-        # 입력 다이얼로그에서 robot_id (또는 자동 배정) + items 1건을 받는다.
-        dlg = InboundStartDialog(self)
-        if dlg.exec() != QDialog.Accepted:
-            return
-        rid, items = dlg.payload()
-
+        # [실로봇연동][다중로봇dispatcher] React admin_ui '입고 시나리오 시작' 버튼과 동일 동작.
+        # 별도 입력 없이 즉시 fleet.inbound_demo.start(['sshopy2','sshopy1','sshopy3']) 호출.
+        # FrontJet/창고존/서브존 mutex 로 직렬화되어 각 sshopy worker 가 입고 task 진행.
         try:
-            resp = self.api.inbound_start(robot_id=rid, items=items)
+            resp = self.api.inbound_start()   # 기본 robot_ids 사용 (백엔드 기본값)
         except Exception as e:
             QMessageBox.warning(
                 self, "입고 시작 실패",
@@ -503,19 +441,21 @@ class MonitoringScreen(QWidget):
             )
             return
 
-        # 응답 형식: {ok: bool, message: str, task_id: str|None}
-        ok      = bool(resp.get("ok"))
-        msg     = resp.get("message") or ""
-        task_id = resp.get("task_id")
+        # 응답 형식: {ok: bool, message: str, robot_ids: list[str]}
+        ok        = bool(resp.get("ok"))
+        msg       = resp.get("message") or ""
+        robot_ids = resp.get("robot_ids") or []
         if ok:
             QMessageBox.information(
                 self, "입고 시작",
-                f"입고 시나리오 시작\n\nTASK ID: {task_id or '—'}\n메시지: {msg or 'ok'}"
+                f"다중-sshopy 입고 시나리오 dispatch\n"
+                f"우선순위: {', '.join(robot_ids) if robot_ids else '(기본값)'}\n"
+                f"메시지: {msg or 'ok'}"
             )
         else:
             QMessageBox.warning(
                 self, "입고 시작 실패",
-                f"메시지: {msg or '알 수 없는 오류'}\nTASK ID: {task_id or '—'}"
+                f"메시지: {msg or '알 수 없는 오류'}"
             )
 
     # ── Data update slots (called by MainWindow) ──────────────────────────

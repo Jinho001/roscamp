@@ -330,6 +330,8 @@ class _RobotState:
         self.joint_states: dict | None = None
         self.busy                  = False
         self.last_work_complete: str | None = None
+        # trigger_work → work_complete 블로킹 대기용 (front_jet 등 jetcobot 트리거)
+        self._work_complete_event: threading.Event = threading.Event()
 
         # 배달 시나리오 상태
         self.delivery_stage: int | None = None
@@ -632,6 +634,8 @@ class RobotManager:
     @staticmethod
     def _on_work_complete(state: _RobotState, msg: dict):
         state.busy = False
+        state.last_work_complete = msg.get("data")
+        state._work_complete_event.set()
 
     def _on_nav_status(self, state: _RobotState, msg: dict):
         """
@@ -970,10 +974,11 @@ class RobotManager:
 
         elif s == TRYON_STAGE_TO_FRONTJET:
             # 회수존 도착 → front_jet 그리퍼 → 홈 복귀
-            print(f"[fleet] {robot_id} (시착) 회수존 도착 → front_jet 팔 동작")
+            # FMS → /front_jet/trigger_work 발행, 완료 시 /front_jet/work_complete 수신 (fire-and-forget)
+            print(f"[fleet] {robot_id} (시착) 회수존 도착 → front_jet trigger_work 발행")
             threading.Thread(
-                target=self._ssh_exec,
-                args=("front_jet", self._FRONT_JET_SCRIPT),
+                target=self._trigger_work_blocking,
+                args=("front_jet", robot_id),
                 daemon=True,
             ).start()
             self._set_tryon_stage(state, TRYON_STAGE_TO_HOME)  # [실로봇연동]
@@ -1012,10 +1017,11 @@ class RobotManager:
 
         elif stage == 1:
             # 매장 도착 → front_jet 팔 동작 → 홈 복귀
-            print(f"[fleet] {robot_id} 매장 도착 → front_jet 팔 동작 시작")
+            # FMS → /front_jet/trigger_work 발행, 완료 시 /front_jet/work_complete 수신 (fire-and-forget)
+            print(f"[fleet] {robot_id} 매장 도착 → front_jet trigger_work 발행")
             threading.Thread(
-                target=self._ssh_exec,
-                args=("front_jet", self._FRONT_JET_SCRIPT),
+                target=self._trigger_work_blocking,
+                args=("front_jet", robot_id),
                 daemon=True,
             ).start()
             self._set_delivery_stage(state, 2)  # [실로봇연동]
@@ -1443,7 +1449,8 @@ class RobotManager:
         출력: 없음 (SSH 실패 시에도 다음 단계로 진행, 재시도 로직 TODO)
         """
         print(f"[fleet] (입고) {task.task_id} FrontJet 상차 작업 중 (박스 2개)...")
-        ok = self._ssh_exec("front_jet", self._SCRIPTS["inbound_load"])
+        # /front_jet/trigger_work 발행 → /front_jet/work_complete 수신까지 블로킹
+        ok = self._trigger_work_blocking("front_jet", task.robot_id)
         print(f"[fleet] (입고) {task.task_id} FrontJet 상차 {'완료' if ok else '실패(계속)'}")
 
         # [1-07] 상차 완료 → SShopy 창고로 이동
@@ -1806,7 +1813,8 @@ class RobotManager:
         출력: 없음 (SSH 실패 시에도 IDENTIFY 단계로 진행, 재시도 로직 TODO)
         """
         print(f"[fleet] (회수) {task.task_id} FrontJet 상차 작업 중...")
-        ok = self._ssh_exec("front_jet", self._SCRIPTS["retrieval_load"])
+        # /front_jet/trigger_work 발행 → /front_jet/work_complete 수신까지 블로킹
+        ok = self._trigger_work_blocking("front_jet", task.robot_id)
         print(f"[fleet] (회수) {task.task_id} FrontJet 상차 {'완료' if ok else '실패(계속)'}")
         # [4-09] 상품 식별 대기 단계로 전환 — identify_product() 호출 대기
         self._advance_retrieval_stage(task, RETRIEVAL_STAGE_IDENTIFY)
@@ -2015,6 +2023,35 @@ class RobotManager:
         pub = self._get_pub(robot_id, f"/{ns}/trigger_work", "std_msgs/String", client)
         pub.publish(roslibpy.Message({"data": sshopy_id}))
         state.busy = True
+        return True
+
+    def _trigger_work_blocking(self, robot_id: str, sshopy_id: str,
+                               timeout: float = 60.0) -> bool:
+        """
+        역할: trigger_work() 발행 → /{ns}/work_complete 수신까지 블로킹 대기.
+        입력: robot_id(=front_jet|ware_jet), sshopy_id(=대상 sshopy ID), timeout(초)
+        동작 흐름:
+            1. state._work_complete_event.clear()
+            2. trigger_work() 발행 (실패 시 False 즉시 반환)
+            3. event.wait(timeout) — _on_work_complete()가 set() 호출 시 깨어남
+            4. timeout 도달 시 False 반환
+        출력: True(work_complete 수신) 또는 False(발행 실패/타임아웃)
+        """
+        state = self._states.get(robot_id)
+        if not state:
+            print(f"[fleet] {robot_id} _trigger_work_blocking: state 없음")
+            return False
+        state._work_complete_event.clear()
+        if not self.trigger_work(robot_id, sshopy_id):
+            print(f"[fleet] {robot_id} trigger_work 발행 실패 (rosbridge 미연결?)")
+            return False
+        print(f"[fleet] {robot_id} trigger_work 발행 → work_complete 대기 "
+              f"(sshopy={sshopy_id}, timeout={timeout}s)")
+        ok = state._work_complete_event.wait(timeout=timeout)
+        if not ok:
+            print(f"[fleet] {robot_id} work_complete 타임아웃 ({timeout}s)")
+            return False
+        print(f"[fleet] {robot_id} work_complete 수신: data={state.last_work_complete!r}")
         return True
 
     # ── Jetcobot 스크립트 경로 (각 jetcobot의 ~/scripts/ 에 배치됨) ──
