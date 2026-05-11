@@ -117,11 +117,12 @@ const RETRIEVAL_STAGE_LABELS = {
 const qToTheta = (oz, ow) => 2 * Math.atan2(oz, ow)
 
 const LOCATIONS = [
-  { key: 'home',      label: '🏠 홈(1)',     x: 0.771, y: -0.008, oz:  0.352, ow: 0.936 },
-  { key: 'home_2',    label: '🏠 홈(2)',     x: 0.823, y:  0.649, oz: -0.466, ow: 0.885 },
-  { key: 'home_3',    label: '🏠 홈(3)',     x: 1.481, y:  0.301, oz:  1.000, ow: 0.000 },
+  { key: 'home',      label: '🏠 홈(1)',     x: 1.002, y:  0.077, oz:  0.4435, ow: 0.8963 },
+  { key: 'home_2',    label: '🏠 홈(2)',     x: 1.026, y:  0.679, oz: -0.3940, ow: 0.9191 },
+  { key: 'home_3',    label: '🏠 홈(3)',     x: 1.670, y:  0.398, oz:  1.0000, ow: 0.0048 },
   { key: 'frontjet',  label: '📥 입고/회수',  x: 0.720, y:  0.477, oz:  0.686, ow: 0.727 },
   { key: 'warejet',   label: '📦 창고',      x: -0.003, y: 0.160, oz:  0.026, ow: 1.000 },
+  { key: 'warejet_subzone', label: '🧪 창고 서브존', x: 0.010, y: -0.038, oz: 0.025, ow: 1.000 },
   { key: 'charging',  label: '🔋 충전',      x: 0.278, y:  0.642, oz: -0.720, ow: 0.694 },
   { key: 'tryzone_1', label: '👕 시착 1',    x: 1.047, y:  0.136, oz:  0.708, ow: 0.706 },
   { key: 'tryzone_2', label: '👕 시착 2',    x: 1.367, y:  0.268, oz:  1.000, ow: 0.002 },
@@ -1164,6 +1165,264 @@ function SchedulePanel({ robots, addLog }) {
   )
 }
 
+// ── Inbound Demo Panel (다중 sshopy + ResourceLock) ──────────────────────────
+
+const INBOUND_DEMO_STAGE_LABELS = {
+  40: 'FrontJet 락 대기',  41: 'FrontJet 이동',  42: 'FrontJet 작업(sim)',
+  48: '창고존 락 대기',    43: '창고존 이동',     44: 'WareJet 작업(sim)',
+  49: '서브존 락 대기',    45: '서브존 이동',
+  46: '홈 복귀',           47: '완료',
+}
+const INBOUND_DEMO_STAGE_COLOR = {
+  40: COLORS.gray,   41: COLORS.blue,   42: COLORS.orange,
+  48: COLORS.gray,   43: COLORS.blue,   44: COLORS.orange,
+  49: COLORS.gray,   45: COLORS.blue,
+  46: COLORS.purple, 47: COLORS.green,
+}
+
+function InboundDemoPanel({ robots, addLog }) {
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState(null)
+
+  // 진행 중일 때 1초마다 상태 폴링
+  useEffect(() => {
+    let alive = true
+    async function poll() {
+      try {
+        const s = await fetch('/inbound_demo/status').then(r => r.json())
+        if (alive) setStatus(s)
+        if (alive && s?.active) setTimeout(poll, 1000)
+        else if (alive && status?.active && !s?.active) {
+          addLog?.('입고 데모 종료', 'ok')
+        }
+      } catch {}
+    }
+    poll()
+    return () => { alive = false }
+  }, [busy])
+
+  async function start() {
+    setBusy(true)
+    addLog?.('입고 시나리오 시작 요청 (sshopy1/2/3)', 'info')
+    try {
+      const r = await fetch('/inbound_demo/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ robot_ids: ['sshopy2', 'sshopy1', 'sshopy3'] }),
+      }).then(r => r.json())
+      addLog?.(r.ok ? r.message : `실패: ${r.message}`, r.ok ? 'ok' : 'err')
+    } catch (e) {
+      addLog?.(`오류: ${e}`, 'err')
+    }
+    setBusy(false)
+  }
+
+  async function cancel() {
+    try {
+      const r = await fetch('/inbound_demo/cancel', { method: 'POST' }).then(r => r.json())
+      addLog?.(r.ok ? '입고 데모 취소' : `취소 실패: ${r.message}`, r.ok ? 'warn' : 'err')
+    } catch (e) {
+      addLog?.(`취소 오류: ${e}`, 'err')
+    }
+  }
+
+  const active = status?.active
+  const robotEntries = status?.robots ? Object.entries(status.robots) : []
+
+  return (
+    <div style={{ marginBottom: 16, border: '1px solid #e5e7eb', borderRadius: 12, padding: 14, background: '#eff6ff' }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: COLORS.blue, textTransform: 'uppercase', letterSpacing: 1 }}>
+          입고 시나리오 (다중 sshopy)
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: COLORS.gray }}>
+          {active ? `진행 중 (${status.elapsed}s)` : '대기'}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button
+          onClick={start}
+          disabled={busy || active}
+          style={{
+            ...btnStyle, flex: 2,
+            background: (busy || active) ? COLORS.gray : COLORS.blue,
+            fontSize: 14, padding: '10px 0',
+          }}
+        >
+          🚚 [입고 시나리오] 시작
+        </button>
+        <button
+          onClick={cancel}
+          disabled={!active}
+          style={{
+            ...btnStyle, flex: 1,
+            background: active ? COLORS.red : COLORS.gray,
+            fontSize: 13, padding: '10px 0',
+          }}
+        >
+          🛑 취소
+        </button>
+      </div>
+
+      {robotEntries.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12 }}>
+          {robotEntries.map(([rid, info]) => (
+            <div key={rid} style={{ display: 'flex', gap: 8, padding: '3px 0' }}>
+              <span style={{ width: 60, fontWeight: 600 }}>{rid}</span>
+              <span style={{ color: INBOUND_DEMO_STAGE_COLOR[info.stage] || COLORS.gray }}>
+                ● {info.stage_label || INBOUND_DEMO_STAGE_LABELS[info.stage] || `stage ${info.stage}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Traffic Manager 테스트 패널 ────────────────────────────────────────────
+
+const TRAFFIC_PRIORITIES = [
+  { value: 1, label: 'P1 호출 (TVC)', color: COLORS.red },
+  { value: 2, label: 'P2 시착',       color: COLORS.orange },
+  { value: 3, label: 'P3 입고',       color: COLORS.blue },
+  { value: 4, label: 'P4 회수',       color: COLORS.gray },
+]
+
+// 자주 쓰는 목적지 프리셋
+const TRAFFIC_TARGETS = [
+  { key: 'frontjet', label: 'FrontJet', x: 0.720, y:  0.477, theta: 1.51 },
+  { key: 'warejet',  label: '창고존',   x: -0.003, y: 0.160, theta: 0.05 },
+  { key: 'subzone',  label: '서브존',   x: 0.010, y: -0.038, theta: 0.05 },
+]
+
+function TrafficTestPanel({ addLog }) {
+  const [status, setStatus] = useState({})
+  const [priorities, setPriorities] = useState({ sshopy1: 1, sshopy2: 4, sshopy3: 3 })
+  const [target, setTarget] = useState('frontjet')
+
+  // 1초 polling
+  useEffect(() => {
+    let alive = true
+    async function poll() {
+      try {
+        const s = await fetch('/traffic/status').then(r => r.json())
+        if (alive) setStatus(s)
+      } catch {}
+      if (alive) setTimeout(poll, 1000)
+    }
+    poll()
+    return () => { alive = false }
+  }, [])
+
+  async function dispatch(rid) {
+    const t = TRAFFIC_TARGETS.find(x => x.key === target)
+    const p = priorities[rid]
+    addLog?.(`${rid} dispatch P${p} → ${t.label}`, 'info')
+    try {
+      const r = await fetch('/traffic/dispatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ robot_id: rid, priority: p, x: t.x, y: t.y, theta: t.theta }),
+      }).then(r => r.json())
+      if (!r.ok) addLog?.(`${rid} dispatch 실패`, 'err')
+    } catch (e) {
+      addLog?.(`${rid} dispatch 오류: ${e}`, 'err')
+    }
+  }
+
+  async function release(rid) {
+    addLog?.(`${rid} release`, 'warn')
+    try {
+      await fetch(`/traffic/release?robot_id=${rid}`, { method: 'POST' })
+    } catch {}
+  }
+
+  async function releaseAll() {
+    for (const rid of PINKY_ROBOT_IDS) await release(rid)
+  }
+
+  return (
+    <div style={{ marginBottom: 16, border: '1px solid #e5e7eb', borderRadius: 12, padding: 14, background: '#fef2f2' }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: COLORS.red, textTransform: 'uppercase', letterSpacing: 1 }}>
+          🚦 Traffic Manager 테스트
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: COLORS.gray }}>yield 0.35m</span>
+      </div>
+
+      {/* 공통 목적지 선택 */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8, alignItems: 'center' }}>
+        <span style={{ fontSize: 11, color: COLORS.gray, width: 50 }}>목적지</span>
+        <select value={target} onChange={e => setTarget(e.target.value)} style={{ ...inputStyle, flex: 1 }}>
+          {TRAFFIC_TARGETS.map(t => <option key={t.key} value={t.key}>{t.label} ({t.x.toFixed(2)}, {t.y.toFixed(2)})</option>)}
+        </select>
+      </div>
+
+      {/* sshopy 별 우선순위 + dispatch 버튼 */}
+      {PINKY_ROBOT_IDS.map(rid => {
+        const st = status[rid]
+        const colorMeta = TRAFFIC_PRIORITIES.find(p => p.value === priorities[rid])
+        return (
+          <div key={rid} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
+            <span style={{ width: 60, fontSize: 13, fontWeight: 600 }}>{rid}</span>
+            <select
+              value={priorities[rid]}
+              onChange={e => setPriorities({ ...priorities, [rid]: parseInt(e.target.value) })}
+              style={{ ...inputStyle, flex: 2, color: colorMeta?.color }}
+            >
+              {TRAFFIC_PRIORITIES.map(p => (
+                <option key={p.value} value={p.value}>{p.label}</option>
+              ))}
+            </select>
+            <button onClick={() => dispatch(rid)}
+                    style={{ ...btnStyle, background: COLORS.blue, flex: 1, fontSize: 12 }}>
+              🚀 dispatch
+            </button>
+            <button onClick={() => release(rid)}
+                    style={{ ...btnStyle, background: COLORS.gray, flex: 0.7, fontSize: 12 }}>
+              해제
+            </button>
+            {st ? (
+              <span style={{
+                width: 28, fontSize: 18, textAlign: 'center',
+                color: st.paused ? COLORS.red : COLORS.green,
+              }}>
+                {st.paused ? '🛑' : '✓'}
+              </span>
+            ) : (
+              <span style={{ width: 28, fontSize: 12, textAlign: 'center', color: COLORS.gray }}>—</span>
+            )}
+          </div>
+        )
+      })}
+
+      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+        <button onClick={releaseAll}
+                style={{ ...btnStyle, background: COLORS.gray, flex: 1, fontSize: 12 }}>
+          전체 해제
+        </button>
+      </div>
+
+      {/* 상태 표시 */}
+      {Object.keys(status).length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 11, color: COLORS.gray }}>
+          {Object.entries(status).map(([rid, s]) => (
+            <div key={rid} style={{ display: 'flex', gap: 6 }}>
+              <span style={{ width: 60, color: '#000' }}>{rid}</span>
+              <span style={{ width: 30 }}>P{s.priority}</span>
+              <span style={{ color: s.paused ? COLORS.red : COLORS.green, flex: 1 }}>
+                {s.paused ? `🛑 ${s.reason || 'paused'}` : '✓ active'}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -1218,6 +1477,12 @@ export default function App() {
 
       {/* map */}
       <MapView robots={robots} />
+
+      {/* 입고 시나리오 (다중 sshopy + ResourceLock) */}
+      <InboundDemoPanel robots={robots} addLog={addLog} />
+
+      {/* Traffic Manager 테스트 */}
+      <TrafficTestPanel addLog={addLog} />
 
       {/* 동시 시나리오 테스트 */}
       <SchedulePanel robots={robots} addLog={addLog} />

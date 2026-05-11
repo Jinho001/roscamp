@@ -58,12 +58,13 @@ def _q_to_theta(oz: float, ow: float) -> float:
 # 창고 / 회수존 (시착 시나리오 공용)
 TRYON_WAREJET   = {"x": -0.003, "y": 0.160, "theta": _q_to_theta( 0.026, 1.000)}
 TRYON_FRONTJET  = {"x":  0.720, "y": 0.477, "theta": _q_to_theta( 0.686, 0.727)}
+WAREJET_SUBZONE = {"x":  0.010, "y": -0.038, "theta": _q_to_theta( 0.025, 1.000)}
 
 # 핑키별 홈위치 (sshopy1=1번핑기, sshopy2=2번핑키, sshopy3=3번핑키)
 TRYON_HOMES = {
-    "sshopy1": {"x": 0.771, "y": -0.008, "theta": _q_to_theta( 0.352, 0.936)},
-    "sshopy2": {"x": 0.823, "y":  0.649, "theta": _q_to_theta(-0.466, 0.885)},
-    "sshopy3": {"x": 1.481, "y":  0.301, "theta": _q_to_theta( 1.000, 0.000)},
+    "sshopy1": {"x": 1.002, "y": 0.077, "theta":  0.919},   # 핑키 초기 위치 (launch initial_pose)
+    "sshopy2": {"x": 1.026, "y": 0.679, "theta": -0.810},
+    "sshopy3": {"x": 1.670, "y": 0.398, "theta":  3.132},
 }
 
 
@@ -357,6 +358,9 @@ class _RobotState:
         self.retrieval_task_id: Optional[str] = None  # 진행 중인 회수 task ID
         self.retrieval_stage:   Optional[int] = None  # 현재 회수 stage
 
+        # [Scene 1 확장] 입고 데모 시나리오 상태 — DEMO_STAGE_* 상수
+        self.inbound_demo_stage: Optional[int] = None  # 현재 입고 데모 stage
+
     def to_dict(self) -> dict:
         """
         역할: 로봇의 현재 상태를 WebSocket·REST 응답용 dict로 직렬화한다.
@@ -388,6 +392,8 @@ class _RobotState:
             # [Scene 4] 회수 상태
             "retrieval_task_id":  self.retrieval_task_id,
             "retrieval_stage":    self.retrieval_stage,
+            # [Scene 1 확장] 입고 데모 상태
+            "inbound_demo_stage": self.inbound_demo_stage,
         }
 
     def reset_live_data(self):
@@ -630,14 +636,12 @@ class RobotManager:
     def _on_nav_status(self, state: _RobotState, msg: dict):
         """
         nav2 NavigateToPose 액션 status 수신.
-        시나리오2(시착)에서만 SUCCEEDED 신호로 도착 판정.
+        SUCCEEDED 시각을 _nav_succeeded_at에 기록 — 도착 판정에서 사용.
         status: 1=ACCEPTED, 2=EXECUTING, 4=SUCCEEDED, 5=CANCELED, 6=ABORTED
 
         주의: status_array 는 최근 N개 goal 누적 리스트. stale SUCCEEDED 무시 위해
         goal_info.stamp >= _goal_sent_time 인 엔트리만 인정.
         """
-        if state.tryon_stage is None:
-            return
         if state._goal_sent_time <= 0:
             return
         for entry in msg.get("status_list", []):
@@ -1228,10 +1232,11 @@ class RobotManager:
         출력: True(완전 유휴) 또는 False(시나리오 진행 중)
         """
         return (
-            state.delivery_stage  is None and
-            state.tryon_stage     is None and
-            state.inbound_stage   is None and
-            state.retrieval_stage is None
+            state.delivery_stage    is None and
+            state.tryon_stage       is None and
+            state.inbound_stage     is None and
+            state.retrieval_stage   is None and
+            state.inbound_demo_stage is None
         )
 
     def _assign_inbound_robot(self, preferred_id: Optional[str] = None) -> Optional[str]:
@@ -1940,7 +1945,8 @@ class RobotManager:
         }))
         return True
 
-    def goal_pose(self, robot_id: str, x: float, y: float, theta: float = 0.0) -> bool:
+    def goal_pose(self, robot_id: str, x: float, y: float, theta: float = 0.0,
+                  _traffic_internal: bool = False) -> bool:
         """
         역할: Nav2에 절대 좌표 이동 목표를 발행한다 — 모든 시나리오에서 로봇 이동 명령의 유일한 진입점.
         입력: robot_id, x(미터), y(미터), theta(yaw 라디안, 기본 0.0)
@@ -1967,6 +1973,10 @@ class RobotManager:
                 state._last_arrival_time = 0.0  # cooldown 우회 — 즉시 도착 판정
                 self._check_arrival(state)
             threading.Thread(target=_fake_arrival, daemon=True).start()
+            if not _traffic_internal:
+                tm = getattr(self, "traffic_mgr", None)
+                if tm is not None:
+                    tm.notify_goal(robot_id, x, y, theta)
             return True
 
         client = self._clients.get(robot_id)
@@ -1987,6 +1997,11 @@ class RobotManager:
         state._goal_sent_time   = time.time()
         state._nav_succeeded_at = 0.0
         print(f"[fleet] {robot_id} → /{ns}/goal_pose x={x} y={y} theta={theta:.2f}")
+        # 트래픽 매니저에 last_goal 통지 (traffic 내부 호출은 통지하지 않음)
+        if not _traffic_internal:
+            tm = getattr(self, "traffic_mgr", None)
+            if tm is not None:
+                tm.notify_goal(robot_id, x, y, theta)
         return True
 
     def trigger_work(self, robot_id: str, sshopy_id: str) -> bool:
@@ -2088,3 +2103,12 @@ class RobotManager:
 
 
 fleet = RobotManager()
+
+# ── 트래픽 매니저 — 다중 시나리오 충돌 회피 (yield-based) ──────────────────────
+from fms.scenarios.traffic_manager import TrafficManager
+fleet.traffic_mgr = TrafficManager(fleet)
+fleet.traffic_mgr.start()
+
+# ── 입고 데모 오케스트레이터 (다중 sshopy + ResourceLock 검증) ────────────────
+from fms.scenarios.inbound_demo import InboundDemoOrchestrator
+fleet.inbound_demo = InboundDemoOrchestrator(fleet)

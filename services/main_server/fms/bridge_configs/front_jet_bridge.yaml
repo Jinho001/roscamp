@@ -12,8 +12,33 @@ topics:
     type: std_msgs/msg/String
     remap: /front_jet/work_complete
 
+  # ── Robot → Server: 적재 완료 (FrontJet → FMS) ──
+  /sshopy1/load_complete:
+    type: std_msgs/msg/Bool
+    remap: /sshopy1/load_complete
+  /sshopy2/load_complete:
+    type: std_msgs/msg/Bool
+    remap: /sshopy2/load_complete
+  /sshopy3/load_complete:
+    type: std_msgs/msg/Bool
+    remap: /sshopy3/load_complete
+
   # ── Server → Robot (domain 99 → 14, reversed) ──
   /front_jet/trigger_work:
     type: std_msgs/msg/String
     remap: /trigger_work
+    reversed: true
+
+  # ── Server → Robot: sshopy 도착 신호 (FMS → FrontJet) ──
+  /sshopy1/arrived:
+    type: std_msgs/msg/Bool
+    remap: /sshopy1/arrived
+    reversed: true
+  /sshopy2/arrived:
+    type: std_msgs/msg/Bool
+    remap: /sshopy2/arrived
+    reversed: true
+  /sshopy3/arrived:
+    type: std_msgs/msg/Bool
+    remap: /sshopy3/arrived
     reversed: true

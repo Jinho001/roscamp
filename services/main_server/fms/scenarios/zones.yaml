@@ -1,0 +1,116 @@
+# scenarios/zones.yaml — Open-RMF 어휘를 따른 zone/waypoint 단일 소스.
+#
+# Phase 1: 데이터 정의만. 기존 시나리오 코드(constants.py, inbound_demo.py 등)는
+# 이 파일을 사용하지 않는다. Phase 2 에서 MutexGroupManager 와 함께 사용 예정.
+#
+# 좌표는 services/main_server/fms/scenarios/constants.py 에 있던 값을 그대로 옮긴 것.
+#
+# 표기 규약:
+#   - x, y      : 미터
+#   - theta     : 라디안 (직접 명시할 때)
+#   - quaternion: { oz, ow } 형태 — theta = 2 * atan2(oz, ow) 로 변환됨
+#   - mutex     : 같은 string 그룹은 동시에 1대만 점유 가능 (RMF mutex group)
+#   - dock_name : 진입 시 트리거할 docking action 이름
+#   - is_parking_spot  : 비상 retreat 위치 (홈)
+#   - is_holding_point : 무한 대기 가능 waypoint (Phase 2 에서 사용)
+#   - owner     : parking_spot 소유 robot_id
+
+version: 1
+
+waypoints:
+
+  # ── Zone centers (mutex 그룹 단위로 락 직렬화 대상) ───────────────────────
+  frontjet_center:
+    x: 0.720
+    y: 0.477
+    quaternion: { oz: 0.686, ow: 0.727 }
+    mutex: frontjet
+    dock_name: frontjet_load
+    description: FrontJet jetcobot 상차 위치
+
+  warejet_center:
+    x: -0.003
+    y: 0.160
+    quaternion: { oz: 0.026, ow: 1.000 }
+    mutex: warejet
+    dock_name: warejet_store
+    description: WareJet jetcobot 적재 위치
+
+  subzone_center:
+    x: -0.124
+    y: -0.055
+    quaternion: { oz: 0.005, ow: 1.000 }
+    mutex: subzone
+    description: WareJet 서브존 — 사용자 amcl 측정 (서브 대기존 안전 위치)
+
+  # ── 시착존 (Scene 2) ─────────────────────────────────────────────────────
+  tryzone_1: { x: 1.047, y: 0.136, quaternion: { oz:  0.708, ow: 0.706 } }
+  tryzone_2: { x: 1.367, y: 0.268, quaternion: { oz:  1.000, ow: 0.002 } }
+  tryzone_3: { x: 1.217, y: 0.550, quaternion: { oz: -0.714, ow: 0.700 } }
+  tryzone_4: { x: 0.881, y: 0.431, quaternion: { oz: -0.020, ow: 1.000 } }
+
+  # ── 배달 시나리오 (Scene 3) — theta 직접 표기 ───────────────────────────
+  delivery_0: { x: 0.264, y: 0.509, theta:  1.674 }
+  delivery_1: { x: 0.918, y: 0.426, theta:  1.655 }
+  delivery_2: { x: 1.086, y: 0.081, theta: -0.362 }
+
+  # ── 핑키별 홈 (parking_spot, owner 지정) ────────────────────────────────
+  home_sshopy1:
+    x: 1.002
+    y: 0.077
+    quaternion: { oz: 0.4435, ow: 0.8963 }   # yaw 0.919
+    is_parking_spot: true
+    owner: sshopy1
+  home_sshopy2:
+    x: 1.026
+    y: 0.679
+    quaternion: { oz: -0.3940, ow: 0.9191 }  # yaw -0.810
+    is_parking_spot: true
+    owner: sshopy2
+  home_sshopy3:
+    x: 1.670
+    y: 0.398
+    quaternion: { oz: 1.0000, ow: 0.0048 }   # yaw 3.132
+    is_parking_spot: true
+    owner: sshopy3
+
+  # ── Holding / approach / exit waypoints (Phase 2) ──────────────────────
+  # ⚠️  추천 좌표 — 기하학적 추정이며 실측 검증 전 상태.
+  #     Phase 3 (inbound_demo_v2) 진입 전에 admin_ui 마커 + Nav2 goal 테스트로 검증할 것.
+  #     맵 크기가 작아서 (2.04 × 1.06 m) hold 는 zone 당 1개만 운용한다.
+  #
+  # 검증 절차:
+  #   1) admin_ui MapView 에 마커 표시 → 벽/장애물 위에 떨어지지 않았는지 확인.
+  #   2) curl -X POST /traffic/dispatch 로 goal_pose 단건 발행 → Nav2 도착 확인.
+  #   3) Nav2 reject → costmap inflation 충돌 → 좌표 ±0.05~0.10m 조정 후 재시도.
+
+  # FrontJet zone (mutex: frontjet)
+  # NOTE: approach=center 유지 (home→frontjet 직진), exit 만 SW로 0.21m displaced
+  #       → 2대 pipeline 시 sshopy2가 release 전 step-out 보장
+  frontjet_approach: { x:  0.720, y:  0.477,  quaternion: { oz: 0.686, ow: 0.727 }, mutex: frontjet }
+  frontjet_exit:     { x:  0.717, y:  0.118,  quaternion: { oz: 0.9996, ow: 0.0276 }, mutex: frontjet }   # 사용자 amcl WP1 — 남쪽 회랑 진입
+  frontjet_hold_0:   { x:  0.25,  y:  0.30,   theta:  0.32, is_holding_point: true }
+
+  # WareJet zone (mutex: warejet)
+  # NOTE: warejet_approach 는 center 와 동일 좌표 — frontjet_center → warejet_center 직진
+  warejet_approach:  { x:  0.382, y:  0.132,  quaternion: { oz: 0.9997, ow: 0.0247 }, mutex: warejet }   # 사용자 amcl WP2 — 남쪽 회랑 종착
+  warejet_exit:      { x: -0.10,  y:  0.05,   theta: -0.67, mutex: warejet }
+  warejet_hold_0:    { x:  0.40,  y:  0.10,   theta: -2.94, is_holding_point: true }
+
+  # SubZone (mutex: subzone)
+  # NOTE: approach 는 center 와 동일 좌표 (직진), exit 는 subzone → home 회랑 진입점
+  subzone_approach:  { x: -0.124, y: -0.055,  quaternion: { oz: 0.005, ow: 1.000 }, mutex: subzone }   # = center (직진)
+  subzone_exit:      { x:  0.466, y: -0.021,  quaternion: { oz: 0.012, ow: 1.000 }, mutex: subzone }   # 사용자 amcl WP3 — subzone→home 회랑 mid
+  subzone_hold_0:    { x:  0.200, y: -0.100,  theta: -3.14, is_holding_point: true }
+
+# ── 환경 파라미터 ──────────────────────────────────────────────────────────
+arrival:
+  threshold: 0.30          # m — 도착 판정 거리 (0.20은 Nav2가 wall로 가는 부작용 있어 0.30 유지)
+  cooldown:  5.0           # s
+
+# ── 시나리오 우선순위 (traffic_manager 와 동일) ────────────────────────────
+priorities:
+  customer_call: 1
+  tryon:         2
+  inbound:       3
+  retrieval:     4

@@ -8,6 +8,10 @@ from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel
 from fms.robot_manager import fleet
+from fms.scenarios.inbound_demo_v2 import InboundDemoV2Orchestrator
+
+# v2 입고 데모 오케스트레이터 (Phase 3 — RMF mutex group 기반)
+demo_v2 = InboundDemoV2Orchestrator(fleet)
 
 MAP_PGM  = os.path.abspath(os.path.join(
     os.path.dirname(__file__),
@@ -231,6 +235,88 @@ def inbound_status(task_id: str):
 def inbound_all():
     """전체 입고 태스크 목록 조회."""
     return {"tasks": fleet.get_all_inbound_tasks()}
+
+
+# ── 입고 데모 시나리오 (Scene 1 확장 — 다중 sshopy + ResourceLock) ────────────
+class InboundDemoStartCmd(BaseModel):
+    # 우선순위 순서 (앞에 있을수록 FrontJet 락 먼저 획득)
+    robot_ids: list[str] = ["sshopy2", "sshopy1", "sshopy3"]
+
+
+@app.post("/inbound_demo/start")
+def inbound_demo_start(cmd: InboundDemoStartCmd | None = None):
+    """다중-sshopy 입고 데모 — HOME→FrontJet→창고존→서브존→HOME, 3 mutex로 직렬화."""
+    if cmd is None:
+        cmd = InboundDemoStartCmd()
+    ok, msg = fleet.inbound_demo.start(cmd.robot_ids)
+    return {"ok": ok, "message": msg}
+
+
+@app.post("/inbound_demo/cancel")
+def inbound_demo_cancel():
+    ok, msg = fleet.inbound_demo.cancel()
+    return {"ok": ok, "message": msg}
+
+
+@app.get("/inbound_demo/status")
+def inbound_demo_status():
+    return fleet.inbound_demo.get_status()
+
+
+# ── 입고 데모 v2 (Phase 3 — RMF mutex group 기반, v1과 병행) ─────────────────
+class InboundDemoV2StartCmd(BaseModel):
+    # 우선순위 힌트 — 실제로는 FrontJet center 기준 거리순으로 재정렬됨
+    robot_ids: list[str] = ["sshopy2", "sshopy1", "sshopy3"]
+
+
+@app.post("/inbound_demo_v2/start")
+def inbound_demo_v2_start(cmd: InboundDemoV2StartCmd | None = None):
+    """v2 입고 데모 — zones.yaml waypoint + mutex_groups 기반.
+    leg: acquire(zone) → approach → center → work → exit → release."""
+    if cmd is None:
+        cmd = InboundDemoV2StartCmd()
+    ok, msg = demo_v2.start(cmd.robot_ids)
+    return {"ok": ok, "message": msg}
+
+
+@app.post("/inbound_demo_v2/cancel")
+def inbound_demo_v2_cancel():
+    ok, msg = demo_v2.cancel()
+    return {"ok": ok, "message": msg}
+
+
+@app.get("/inbound_demo_v2/status")
+def inbound_demo_v2_status():
+    return demo_v2.get_status()
+
+
+@app.get("/traffic/status")
+def traffic_status():
+    """트래픽 매니저 상태 — 활성 sshopy의 우선순위/일시정지 상태 조회."""
+    return fleet.traffic_mgr.get_status()
+
+
+class TrafficDispatchCmd(BaseModel):
+    robot_id: str
+    priority: int   # 1=customer_call, 2=tryon, 3=inbound, 4=retrieval
+    x: float
+    y: float
+    theta: float = 0.0
+
+
+@app.post("/traffic/dispatch")
+def traffic_dispatch(cmd: TrafficDispatchCmd):
+    """트래픽 매니저에 sshopy 등록 + goal_pose 발행 (테스트용)."""
+    fleet.traffic_mgr.register(cmd.robot_id, cmd.priority)
+    ok = fleet.goal_pose(cmd.robot_id, cmd.x, cmd.y, cmd.theta)
+    return {"ok": ok, "robot_id": cmd.robot_id, "priority": cmd.priority}
+
+
+@app.post("/traffic/release")
+def traffic_release(robot_id: str):
+    """트래픽 매니저에서 sshopy 등록 해제 (테스트용)."""
+    fleet.traffic_mgr.unregister(robot_id)
+    return {"ok": True, "robot_id": robot_id}
 
 
 # ── 회수 시나리오 (Scene 4) ───────────────────────────────────────────────────

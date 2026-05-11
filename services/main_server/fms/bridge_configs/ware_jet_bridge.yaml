@@ -12,8 +12,33 @@ topics:
     type: std_msgs/msg/String
     remap: /ware_jet/work_complete
 
+  # ── Robot → Server: 적재 완료 (WareJet → FMS) ──
+  /sshopy1/warejet_unload_complete:
+    type: std_msgs/msg/Bool
+    remap: /sshopy1/warejet_unload_complete
+  /sshopy2/warejet_unload_complete:
+    type: std_msgs/msg/Bool
+    remap: /sshopy2/warejet_unload_complete
+  /sshopy3/warejet_unload_complete:
+    type: std_msgs/msg/Bool
+    remap: /sshopy3/warejet_unload_complete
+
   # ── Server → Robot (domain 99 → 15, reversed) ──
   /ware_jet/trigger_work:
     type: std_msgs/msg/String
     remap: /trigger_work
+    reversed: true
+
+  # ── Server → Robot: sshopy 창고 도착 신호 (FMS → WareJet) ──
+  /sshopy1/warejet_arrived:
+    type: std_msgs/msg/Bool
+    remap: /sshopy1/warejet_arrived
+    reversed: true
+  /sshopy2/warejet_arrived:
+    type: std_msgs/msg/Bool
+    remap: /sshopy2/warejet_arrived
+    reversed: true
+  /sshopy3/warejet_arrived:
+    type: std_msgs/msg/Bool
+    remap: /sshopy3/warejet_arrived
     reversed: true
