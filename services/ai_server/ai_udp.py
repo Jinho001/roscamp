@@ -189,12 +189,11 @@ def build_udp_header(frame_id: int, chunk_idx: int, total: int, pkt_type: int) -
 # ─────────────────────────────────────────────────────────────────────────────
 # 완성 프레임 → AI 서버 중계 (동일 binary 포맷으로 재청킹)
 # ─────────────────────────────────────────────────────────────────────────────
-def send_udp_message(sock: socket.socket, frame_id: int, meta: dict, jpeg: bytes, dest=None):
+def send_udp_message(sock: socket.socket, frame_id: int, meta: dict, jpeg: bytes):
     meta_b  = json.dumps(meta).encode('utf-8')
     payload = struct.pack('!H', len(meta_b)) + meta_b + jpeg
     total   = math.ceil(len(payload) / RELAY_CHUNK_SIZE)
-    if dest is None:
-        dest = (AI_SERVER_IP, AI_UDP_PORT)
+    dest    = (AI_SERVER_IP, AI_UDP_PORT)
     for i in range(total):
         chunk = payload[i * RELAY_CHUNK_SIZE:(i + 1) * RELAY_CHUNK_SIZE]
         sock.sendto(build_udp_header(frame_id, i, total, PKT_DATA) + chunk, dest)
