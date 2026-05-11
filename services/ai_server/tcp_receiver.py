@@ -16,13 +16,9 @@ import struct
 import threading
 import time
 
-try:
-    import rclpy
-    from geometry_msgs.msg import PoseStamped
-    from rclpy.node import Node
-    _ROS2_AVAILABLE = True
-except ImportError:
-    _ROS2_AVAILABLE = False
+import rclpy
+from geometry_msgs.msg import PoseStamped
+from rclpy.node import Node
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", "main_server", ".env"))
@@ -97,14 +93,10 @@ def recv_exact_bytes(sock: socket.socket, n: int):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# ROS2 노드 (rclpy 설치 환경에서만 사용 가능)
+# ROS2 노드
 # ══════════════════════════════════════════════════════════════════════
-_NodeBase = Node if _ROS2_AVAILABLE else object
-
-class TcpGoalBridge(_NodeBase):
+class TcpGoalBridge(Node):
     def __init__(self, topic_name: str, frame_id: str, cooldown_sec: float):
-        if not _ROS2_AVAILABLE:
-            raise ImportError("rclpy가 설치되어 있지 않아 TcpGoalBridge를 사용할 수 없습니다.")
         super().__init__("tcp_result_to_hand_raise_goal")
         self._pub        = self.create_publisher(PoseStamped, topic_name, 10)
         self._frame_id   = frame_id
