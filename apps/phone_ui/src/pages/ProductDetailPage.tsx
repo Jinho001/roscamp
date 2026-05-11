@@ -82,6 +82,8 @@ export default function ProductDetailPage() {
   const [tryOnLoading, setTryOnLoading] = useState(false);
   const [tryOnMessage, setTryOnMessage] = useState('');
   const [failModalOpen, setFailModalOpen] = useState(false);
+  // 서버가 /tryon/request 응답으로 배정해준 robot_id (cancel/pickup에서 재사용)
+  const [assignedRobotId, setAssignedRobotId] = useState<string>('');
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -472,7 +474,6 @@ export default function ProductDetailPage() {
    *   - 도착 감지: WS {API}/ws/amr → AMR_ARRIVE → ArrivalModal 자동 표시
    *   - 수령 완료: ArrivalModal onClose에서 POST {API}/pickup/complete
    * ============================================================ */
-  const TRYON_ROBOT_ID = 'sshopy1';   // 임시 하드코딩
 
   const handleTryOnRequest = async () => {
     setTryOnMessage(''); 
@@ -493,7 +494,7 @@ export default function ProductDetailPage() {
           color:      selectedColor ?? null,
           size:       selectedSize != null ? String(selectedSize) : null,
           seat_id:    seat,
-          robot_id:   TRYON_ROBOT_ID,
+          // robot_id 제거 — 서버가 자동 배정 후 응답으로 돌려줌
         }),
       });
       if (!res.ok) {
@@ -501,8 +502,10 @@ export default function ProductDetailPage() {
         setMsg(`시착 요청 실패 (${res.status}): ${text}`);
         return;
       }
+      const data = await res.json();
+      setAssignedRobotId(data.robot_id);
       setMsg(
-        `시착 요청 완료: ${product?.model} / ${selectedSize ?? '-'} / ${selectedColor ?? '-'} / 좌석 ${seat}`
+        `시착 요청 완료: ${product?.model} / ${selectedSize ?? '-'} / ${selectedColor ?? '-'} / 좌석 ${seat} (로봇 ${data.robot_id})`
       );
       setTryOnPopupOpen(true);
     } catch (error) {
@@ -519,8 +522,12 @@ export default function ProductDetailPage() {
     setIsArriveOpen(false);
     if (!API) return;
 
+    if (!assignedRobotId) {
+      setMsg('취소할 로봇 정보 없음');
+      return;
+    }
     try {
-      const res = await fetch(`${API}/tryon/cancel?robot_id=${encodeURIComponent(TRYON_ROBOT_ID)}`, {
+      const res = await fetch(`${API}/tryon/cancel?robot_id=${encodeURIComponent(assignedRobotId)}`, {
         method: 'POST',
       });
       if (!res.ok) {
@@ -529,6 +536,7 @@ export default function ProductDetailPage() {
         return;
       }
       setMsg('시착 요청이 취소되었습니다.');
+      setAssignedRobotId('');
     } catch (error) {
       console.error(error);
       setMsg('시착 요청 취소 중 오류 발생');
@@ -540,9 +548,13 @@ export default function ProductDetailPage() {
 
     setIsArriveOpen(false);
     if (!API) return;
+    if (!assignedRobotId) {
+      setMsg('수령 완료 대상 로봇 정보 없음');
+      return;
+    }
 
     try {
-      const res = await fetch(`${API}/pickup/complete?robot_id=${encodeURIComponent(TRYON_ROBOT_ID)}`, {
+      const res = await fetch(`${API}/pickup/complete?robot_id=${encodeURIComponent(assignedRobotId)}`, {
         method: 'POST',
       });
       if (!res.ok) {
@@ -551,6 +563,7 @@ export default function ProductDetailPage() {
         return;
       }
       setMsg('수령 완료 — 로봇이 회수존으로 이동합니다');
+      setAssignedRobotId('');
     } catch (error) {
       console.error(error);
       setMsg('수령 완료 요청 중 오류 발생');
