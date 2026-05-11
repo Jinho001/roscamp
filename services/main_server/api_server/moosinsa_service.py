@@ -1691,6 +1691,140 @@ async def endpoint_kiosk_page_event(ev: KioskPageEvent):
     return {"received": True, "page": ev.page}
 
 
+# ══════════════════════════════════════════════════════════════
+# [sshopylcd연동] SShopy LCD UI 엔드포인트
+#
+# 흐름:
+#   LCD → POST /sshopylcd/guide/start  → fleet.start_guide() → goal_pose 발행
+#                                       ← {success, robot_id, task_id}
+#   LCD ⇄ GET  /sshopylcd/guide/status  (2초 polling)
+#                                       ← {robot_id, task_id, stage, stage_label,
+#                                          arrived(==AT_SHELF), completed}
+#   LCD → POST /sshopylcd/guide/end    → fleet.end_guide() → 홈 복귀 명령
+#                                       ← {success, robot_id}
+#   LCD → POST /sshopylcd/page_event   (fire-and-forget 로깅)
+# ══════════════════════════════════════════════════════════════
+
+class SshopyLcdPageEvent(BaseModel):
+    """LCD 페이지 전환 이벤트 (fire-and-forget 로깅용)."""
+    page:     str
+    prev:     Optional[str] = None
+    robot_id: str = "sshopy2"
+
+
+class SshopyLcdGuideStartReq(BaseModel):
+    """LCD 안내 시작 요청 — fleet.start_guide() 인자."""
+    robot_id:  str = "sshopy2"
+    shoe_id:   str
+    shoe_name: Optional[str] = ""
+
+
+class SshopyLcdGuideEndReq(BaseModel):
+    """LCD 안내 종료 요청 — fleet.end_guide() 인자."""
+    robot_id: str = "sshopy2"
+
+
+# [sshopylcd연동] LCD 페이지 전환 이력 (인메모리, 최근 200건)
+_sshopylcd_page_log: list[dict] = []
+
+
+@app.post("/sshopylcd/page_event", status_code=200)
+async def endpoint_sshopylcd_page_event(ev: SshopyLcdPageEvent):
+    """SShopy LCD 페이지 전환 이벤트 수신 — 로깅 전용 (fire-and-forget)."""
+    import datetime
+    record = {
+        "robot_id":  ev.robot_id,
+        "page":      ev.page,
+        "prev":      ev.prev,
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    _sshopylcd_page_log.append(record)
+    if len(_sshopylcd_page_log) > 200:
+        _sshopylcd_page_log.pop(0)
+
+    logger.info(
+        f"[sshopylcd/page_event] robot={ev.robot_id} "
+        f"{ev.prev or 'START'} → {ev.page}"
+    )
+    return {"received": True, "page": ev.page}
+
+
+@app.post("/sshopylcd/guide/start")
+async def endpoint_sshopylcd_guide_start(req: SshopyLcdGuideStartReq):
+    """
+    안내 시작 — robot_id 의 SShopy 를 진열대 좌표로 이동시키고 GuideTask 를 생성.
+
+    LCD 는 응답의 task_id 를 보관하여 /sshopylcd/guide/status 폴링에 사용한다.
+    실패 시 HTTP 409 (가용 로봇 없음 / 이미 작업 중 / 미연결 등).
+    """
+    ok, msg, task_id = fleet.start_guide(
+        robot_id=req.robot_id,
+        shoe_id=req.shoe_id,
+        shoe_name=req.shoe_name or "",
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    logger.info(
+        f"[sshopylcd/guide/start] robot={req.robot_id} task={task_id} "
+        f"shoe_id={req.shoe_id} name={req.shoe_name}"
+    )
+    return {
+        "success":  True,
+        "robot_id": req.robot_id,
+        "task_id":  task_id,
+    }
+
+
+@app.post("/sshopylcd/guide/end")
+async def endpoint_sshopylcd_guide_end(req: SshopyLcdGuideEndReq):
+    """
+    안내 종료 — 사용자가 LCD '안내 종료' 버튼을 누른 시점에 호출.
+    fleet 가 해당 SShopy 의 홈 좌표로 goal_pose 를 발행한다.
+
+    실패(진열대 도착 상태가 아닌 경우 등) 시 HTTP 409.
+    """
+    ok, msg = fleet.end_guide(req.robot_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    logger.info(f"[sshopylcd/guide/end] robot={req.robot_id}")
+    return {"success": True, "robot_id": req.robot_id}
+
+
+@app.get("/sshopylcd/guide/status")
+async def endpoint_sshopylcd_guide_status(robot_id: str = "sshopy2"):
+    """
+    안내 진행 상태 조회 — LCD 가 2초 주기로 폴링.
+
+    응답:
+      task_id   : 진행 중 task ID (없으면 None)
+      stage     : GUIDE_STAGE_* (없으면 None)
+      stage_label : 화면 표시용 한글 라벨
+      arrived   : stage == GUIDE_STAGE_AT_SHELF 여부 (LCD 가 완료 팝업 트리거)
+      completed : task record 완료 플래그 (홈 복귀까지 완료 시 True)
+    """
+    from fms.robot_manager import GUIDE_STAGE_AT_SHELF, GUIDE_STAGE_LABELS
+
+    task = fleet.get_active_guide(robot_id)
+    if not task:
+        return {
+            "robot_id":    robot_id,
+            "task_id":     None,
+            "stage":       None,
+            "stage_label": None,
+            "arrived":     False,
+            "completed":   False,
+        }
+    stage = task.get("stage")
+    return {
+        "robot_id":    robot_id,
+        "task_id":     task.get("task_id"),
+        "stage":       stage,
+        "stage_label": task.get("stage_label"),
+        "arrived":     stage == GUIDE_STAGE_AT_SHELF,
+        "completed":   bool(task.get("completed")),
+    }
+
+
 @app.get("/kiosk/store_info")                            # ★ NEW ★
 async def endpoint_kiosk_store_info():
     """
@@ -2235,6 +2369,7 @@ async def api_schedule():
         ("회수", fleet.get_all_retrieval_tasks()),
         ("시착", fleet.get_all_tryon_tasks()),
         ("배달", fleet.get_all_delivery_tasks()),
+        ("안내", fleet.get_all_guide_tasks()),  # [sshopylcd연동]
     ]
 
     rows: list[dict] = []
