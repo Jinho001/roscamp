@@ -99,6 +99,9 @@ class InboundDemoOrchestrator:
         self._task_counter_lock = threading.Lock()
         self._tasks_remaining = 0
         self._tasks_total = 0
+        # [입고물량loop] 사이클당 -2씩 차감. 0이 되면 모든 유휴 sshopy 종료.
+        self._total_quantity = 0
+        self._quantity_remaining = 0
 
     # ── public API ────────────────────────────────────────────────────────
     def is_active(self) -> bool:
@@ -108,6 +111,11 @@ class InboundDemoOrchestrator:
         return {
             "active":  self._active,
             "elapsed": round(time.time() - self._started_at, 1) if self._active else 0.0,
+            # [입고물량loop] UI 가 진행 상황 폴링 시 표시
+            "total_quantity":     self._total_quantity,
+            "quantity_remaining": self._quantity_remaining,
+            "tasks_total":        self._tasks_total,
+            "tasks_remaining":    self._tasks_remaining,
             "robots": {
                 rid: {
                     "stage":       stage,
@@ -117,7 +125,7 @@ class InboundDemoOrchestrator:
             },
         }
 
-    def start(self, robot_ids: list[str]) -> tuple[bool, str]:
+    def start(self, robot_ids: list[str], total_quantity: Optional[int] = None) -> tuple[bool, str]:
         with self._guard:
             if self._active:
                 return False, "이미 진행 중인 데모 있음"
@@ -155,9 +163,16 @@ class InboundDemoOrchestrator:
             for rid in valid:
                 self.fleet._states[rid].inbound_demo_stage = DEMO_STAGE_QUEUED
 
-            # Task pool 설정 — sshopy 수 + EXTRA_TASKS
-            self._tasks_total = len(valid) + EXTRA_TASKS
+            # [입고물량loop] total_quantity 가 지정되면 사이클당 -2 로 환산해 task pool 크기 결정.
+            # 미지정 시 기존 동작 유지 (sshopy 수 + EXTRA_TASKS).
+            if total_quantity is not None and total_quantity > 0:
+                self._total_quantity = int(total_quantity)
+                self._tasks_total = math.ceil(self._total_quantity / 2)
+            else:
+                self._tasks_total = len(valid) + EXTRA_TASKS
+                self._total_quantity = self._tasks_total * 2
             self._tasks_remaining = self._tasks_total
+            self._quantity_remaining = self._total_quantity
 
             for idx, rid in enumerate(valid):
                 t = threading.Thread(
@@ -170,8 +185,14 @@ class InboundDemoOrchestrator:
 
             threading.Thread(target=self._wait_done, daemon=True).start()
             order = " → ".join(valid)
-            print(f"[demo-inbound] 시작 (지정 우선순위): {order}, 총 task={self._tasks_total}")
-            return True, f"입고 데모 시작 — 우선순위: {order}, 총 task={self._tasks_total}"
+            print(
+                f"[demo-inbound] 시작 (지정 우선순위): {order}, "
+                f"총 task={self._tasks_total}, 총 입고물량={self._total_quantity}"
+            )
+            return True, (
+                f"입고 데모 시작 — 우선순위: {order}, "
+                f"총 task={self._tasks_total}, 총 입고물량={self._total_quantity}"
+            )
 
     def cancel(self) -> tuple[bool, str]:
         if not self._active:
@@ -295,13 +316,22 @@ class InboundDemoOrchestrator:
         return False
 
     def _claim_task(self) -> Optional[bool]:
-        """Task pool에서 task 1개 가져오기. 마지막 task면 is_last=True. 남은 task 없으면 None."""
+        """Task pool에서 task 1개 가져오기. 마지막 task면 is_last=True. 남은 task 없으면 None.
+
+        [입고물량loop] 한 사이클당 입고 물량 -2 차감. quantity_remaining 이 0 이 되면
+        남은 task 가 있더라도 새 task 를 발급하지 않는다 (즉시 종료).
+        """
         with self._task_counter_lock:
-            if self._tasks_remaining <= 0:
+            if self._tasks_remaining <= 0 or self._quantity_remaining <= 0:
                 return None
             self._tasks_remaining -= 1
-            is_last = (self._tasks_remaining == 0)
-            print(f"[demo-inbound] task 획득 — 남은 task={self._tasks_remaining}, is_last={is_last}")
+            consume = min(2, self._quantity_remaining)
+            self._quantity_remaining -= consume
+            is_last = (self._tasks_remaining == 0 or self._quantity_remaining <= 0)
+            print(
+                f"[demo-inbound] task 획득 — 남은 task={self._tasks_remaining}, "
+                f"남은 물량={self._quantity_remaining}, is_last={is_last}"
+            )
             return is_last
 
     def _run_robot(self, rid: str, start_delay: float):

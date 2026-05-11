@@ -133,14 +133,25 @@ class ApiClient(QObject):
     def robot_log(self, robot_name: str, limit: int = 50) -> dict:
         return self._get(f"/api/robot/{robot_name}/log?limit={int(limit)}")
 
-    def inbound_start(self, robot_ids: list[str] | None = None) -> dict:
+    def inbound_start(
+        self,
+        robot_ids: list[str] | None = None,
+        total_quantity: int | None = None,
+    ) -> dict:
         # [실로봇연동][다중로봇dispatcher] 다중-sshopy 입고 시나리오 시작.
         # React admin_ui /inbound_demo/start 와 동일 — fleet.inbound_demo.start(robot_ids).
         # robot_ids 미지정 시 백엔드 기본값 ["sshopy2","sshopy1","sshopy3"] 사용.
+        # [입고물량loop] total_quantity — 총 입고 물량. 사이클당 -2, 0 될 때까지 loop.
         payload: dict = {}
         if robot_ids:
             payload["robot_ids"] = robot_ids
+        if total_quantity is not None:
+            payload["total_quantity"] = int(total_quantity)
         return self._post("/api/inbound/start", payload)
+
+    def inbound_status(self) -> dict:
+        # [입고물량loop] 입고 진행 상황 폴링 — monitoring_ui 가 active/quantity_remaining 추적.
+        return self._get("/api/inbound/status")
 
     def emergency_stop(self) -> dict:
         return self._post("/api/emergency/stop")
