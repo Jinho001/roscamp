@@ -100,3 +100,27 @@ INBOUND_STAGE_LABELS = {
 }
 
 INBOUND_TIMEOUT = 300
+
+
+# ── [sshopylcd연동] 안내 시나리오 (Scene 5) stage ──────────────────────────────
+# 배달(0~2)·시착(10~15)·회수(20~26)·입고(30~35) 와 충돌을 피하기 위해 40번대 사용.
+# SShopy LCD UI 에서 고객이 상품 위치 안내를 요청하면, 백엔드가 해당 진열대
+# (임의 좌표 GUIDE_DEMO_TARGET) 로 SShopy 를 이동시키고, 도착 후 LCD 가 polling 으로
+# 완료를 감지하면 안내 완료 메시지를 표시. 사용자가 '안내 종료' 를 누르면 홈으로 복귀.
+
+GUIDE_STAGE_TO_SHELF = 40  # 진열대 이동 중
+GUIDE_STAGE_AT_SHELF = 41  # 진열대 도착 — 고객 접근 / 안내 종료 대기
+GUIDE_STAGE_TO_HOME  = 42  # 홈 복귀 중
+
+GUIDE_STAGE_LABELS = {
+    GUIDE_STAGE_TO_SHELF: "진열대 이동 중",
+    GUIDE_STAGE_AT_SHELF: "진열대 도착 — 안내 종료 대기",
+    GUIDE_STAGE_TO_HOME:  "홈 복귀 중",
+}
+
+# [sshopylcd연동] 데모 단계 임의 좌표.
+# TODO(실로봇테스트): 실제 매장의 진열대 위치로 교체. shoe_id 별 진열대 좌표 매핑이
+# 정의되면 robot_manager.start_guide() 에서 shoe_id → 좌표 lookup 으로 교체.
+GUIDE_DEMO_TARGET = {"x": 0.918, "y": 0.426, "theta": 1.655}
+
+GUIDE_TIMEOUT = 300
