@@ -33,7 +33,7 @@ Role      : 시스템 중앙 백엔드 서버 (FastAPI).
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 import asyncio
 import json
