@@ -9,12 +9,13 @@ def _q_to_theta(oz: float, ow: float) -> float:
 # ── 공용 웨이포인트 ──────────────────────────────────────────────────
 TRYON_WAREJET = {"x": -0.003, "y": 0.160, "theta": _q_to_theta(0.026, 1.000)}
 TRYON_FRONTJET = {"x": 0.720, "y": 0.477, "theta": _q_to_theta(0.686, 0.727)}
+WAREJET_SUBZONE = {"x": 0.010, "y": -0.038, "theta": _q_to_theta(0.025, 1.000)}
 
 # 핑키별 홈위치 (sshopy1=1번핑기, sshopy2=2번핑키, sshopy3=3번핑키)
 TRYON_HOMES = {
-    "sshopy1": {"x": 0.771, "y": -0.008, "theta": _q_to_theta(0.352, 0.936)},
-    "sshopy2": {"x": 0.823, "y": 0.649, "theta": _q_to_theta(-0.466, 0.885)},
-    "sshopy3": {"x": 1.481, "y": 0.301, "theta": _q_to_theta(1.000, 0.000)},
+    "sshopy1": {"x": 1.002, "y": 0.077, "theta":  0.919},   # 핑키 초기 위치 (launch initial_pose)
+    "sshopy2": {"x": 1.026, "y": 0.679, "theta": -0.810},
+    "sshopy3": {"x": 1.670, "y": 0.398, "theta":  3.132},
 }
 
 
