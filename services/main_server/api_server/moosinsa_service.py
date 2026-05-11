@@ -1251,7 +1251,35 @@ class _TryonReq(BaseModel):
     color: Optional[str] = None
     size: Optional[str] = None
     seat_id: int = 1                    # 1~4 (시착존 번호)
-    robot_id: str = "sshopy2"           # 운용 가능한 핑키 ID
+    # robot_id: str = "sshopy2" # 0511 수정 전
+    robot_id: Optional[str] = None      # None이면 서버 자동 배정 (idle pinky)
+
+
+'''
+# Before 0511
+@app.post("/tryon/request")
+async def endpoint_tryon_request(req: _TryonReq):
+    ok, msg = fleet.start_tryon(
+        robot_id=req.robot_id,
+        seat_id=req.seat_id,
+        product_id=req.product_id,
+        color=req.color,
+        size=req.size,
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    logger.info(
+        f"[tryon/request] 시착 시작 → robot={req.robot_id} seat={req.seat_id} "
+        f"product={req.product_id} color={req.color} size={req.size}"
+    )
+    return {
+        "success":    True,
+        "robot_id":   req.robot_id,
+        "seat_id":    req.seat_id,
+        "product_id": req.product_id,
+    }
+'''
+
 
 @app.post("/tryon/request")
 async def endpoint_tryon_request(req: _TryonReq):
@@ -1277,8 +1305,14 @@ async def endpoint_tryon_request(req: _TryonReq):
     반환/응답: 성공 시 {success: True, robot_id, seat_id, product_id}
               실패(좌석 사용중/로봇 작업중/미연결) 시 HTTP 409 + 에러 메시지
     """
+    # 클라이언트 robot_id는 힌트로만 사용 — 실제 배정은 FMS가 수행
+    # (req.robot_id가 None이면 가장 우선순위 높은 idle pinky, 값이 있으면 그 로봇이 idle일 때만 채택)
+    assigned = fleet._assign_inbound_robot(req.robot_id)
+    if assigned is None:
+        raise HTTPException(status_code=503, detail="가용 로봇 없음")
+
     ok, msg = fleet.start_tryon(
-        robot_id=req.robot_id,
+        robot_id=assigned,
         seat_id=req.seat_id,
         product_id=req.product_id,
         color=req.color,
@@ -1288,12 +1322,12 @@ async def endpoint_tryon_request(req: _TryonReq):
         # 좌석 사용중 / 로봇 작업중 / 미연결 등
         raise HTTPException(status_code=409, detail=msg)
     logger.info(
-        f"[tryon/request] 시착 시작 → robot={req.robot_id} seat={req.seat_id} "
-        f"product={req.product_id} color={req.color} size={req.size}"
+        f"[tryon/request] 시착 시작 → robot={assigned} (client hint={req.robot_id}) "
+        f"seat={req.seat_id} product={req.product_id} color={req.color} size={req.size}"
     )
     return {
         "success":    True,
-        "robot_id":   req.robot_id,
+        "robot_id":   assigned,
         "seat_id":    req.seat_id,
         "product_id": req.product_id,
     }
