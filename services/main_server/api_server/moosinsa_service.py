@@ -2144,6 +2144,9 @@ class _AdminInboundStartReq(BaseModel):
     # React admin_ui 의 /inbound_demo/start 와 동일 페이로드. FrontJet/창고존/서브존 mutex 로 직렬화.
     # 우선순위 순서 (앞에 있을수록 FrontJet 락 먼저 획득). 미지정 시 백엔드 기본값.
     robot_ids: list[str] = ["sshopy2", "sshopy1", "sshopy3"]
+    # [입고물량loop] 총 입고 물량 — 사이클당 -2, 0 될 때까지 유휴 sshopy loop.
+    # None/0 이면 기존 동작(sshopy 수 + EXTRA_TASKS) 유지.
+    total_quantity: Optional[int] = None
 
 
 # ── [monitoring_ui] 엔드포인트 ─────────────────────────────────────────────────
@@ -2456,10 +2459,29 @@ async def api_inbound_start(req: Optional[_AdminInboundStartReq] = None):
     각 sshopy 별 worker thread 로 진행한다.
 
     body 미지정 시 기본값 ["sshopy2","sshopy1","sshopy3"] 사용 (React 와 동일).
+
+    [입고물량loop] total_quantity 지정 시 사이클당 -2 로 환산해 task pool 크기 결정.
+    quantity=0 까지 유휴 sshopy 가 loop 돌고, 0 이 되면 모든 워커 종료.
     """
     rids = (req.robot_ids if req else None) or ["sshopy2", "sshopy1", "sshopy3"]
-    ok, msg = fleet.inbound_demo.start(rids)
-    return {"ok": ok, "message": msg, "robot_ids": rids}
+    total_quantity = req.total_quantity if req else None
+    ok, msg = fleet.inbound_demo.start(rids, total_quantity=total_quantity)
+    return {
+        "ok": ok,
+        "message": msg,
+        "robot_ids": rids,
+        "total_quantity": total_quantity,
+    }
+
+
+@app.get("/api/inbound/status")
+async def api_inbound_status():
+    """[입고물량loop] monitoring_ui 가 폴링 — 입고 진행 상황 + 완료 감지에 사용.
+
+    응답 예: {active, total_quantity, quantity_remaining, tasks_total, tasks_remaining, robots}
+    active 가 True→False 로 전이하면 UI 가 '입고 완료' 메시지를 띄운다.
+    """
+    return fleet.inbound_demo.get_status()
 
 
 @app.post("/api/emergency/stop")

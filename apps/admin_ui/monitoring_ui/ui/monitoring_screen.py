@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QHeaderView, QSizePolicy, QScrollArea,
     # [실로봇연동] 로그확인 다이얼로그 / 결과 메시지박스용
     QDialog, QPlainTextEdit, QMessageBox,
+    # [입고물량loop] 총 입고 물량 입력 팝업
+    QInputDialog,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui  import QColor, QFont
@@ -86,6 +88,11 @@ class MonitoringScreen(QWidget):
         self._next_ui_task_id: int = 1
         # [실로봇연동] schedule 백엔드 연결 상태 — UI 배너 토글
         self._schedule_connected: bool = True
+        # [입고물량loop] 입고 진행 폴링 — active=True→False 전이 감지해 '완료' 메시지 표시
+        self._inbound_poll_timer = QTimer(self)
+        self._inbound_poll_timer.setInterval(2000)
+        self._inbound_poll_timer.timeout.connect(self._poll_inbound_status)
+        self._inbound_was_active: bool = False
         self._build_ui()
         self.apply_scale(1.0)
 
@@ -429,11 +436,18 @@ class MonitoringScreen(QWidget):
         dlg.exec()
 
     def _on_inbound(self):
-        # [실로봇연동][다중로봇dispatcher] React admin_ui '입고 시나리오 시작' 버튼과 동일 동작.
-        # 별도 입력 없이 즉시 fleet.inbound_demo.start(['sshopy2','sshopy1','sshopy3']) 호출.
-        # FrontJet/창고존/서브존 mutex 로 직렬화되어 각 sshopy worker 가 입고 task 진행.
+        # [입고물량loop] '입고 시작' 클릭 → 총 입고 물량 입력 팝업 → 사이클당 -2 로 loop.
+        # 0 이 되면 백엔드가 워커 종료 → UI 가 폴링으로 완료 감지 후 메시지 표시.
+        qty, ok_input = QInputDialog.getInt(
+            self, "입고 시작 — 총 입고 물량",
+            "총 입고 물량을 입력하세요:",
+            value=6, minValue=2, maxValue=999, step=2,
+        )
+        if not ok_input:
+            return
+
         try:
-            resp = self.api.inbound_start()   # 기본 robot_ids 사용 (백엔드 기본값)
+            resp = self.api.inbound_start(total_quantity=qty)
         except Exception as e:
             QMessageBox.warning(
                 self, "입고 시작 실패",
@@ -441,22 +455,58 @@ class MonitoringScreen(QWidget):
             )
             return
 
-        # 응답 형식: {ok: bool, message: str, robot_ids: list[str]}
+        # 응답 형식: {ok: bool, message: str, robot_ids: list[str], total_quantity: int}
         ok        = bool(resp.get("ok"))
         msg       = resp.get("message") or ""
         robot_ids = resp.get("robot_ids") or []
-        if ok:
-            QMessageBox.information(
-                self, "입고 시작",
-                f"다중-sshopy 입고 시나리오 dispatch\n"
-                f"우선순위: {', '.join(robot_ids) if robot_ids else '(기본값)'}\n"
-                f"메시지: {msg or 'ok'}"
-            )
-        else:
+        if not ok:
             QMessageBox.warning(
                 self, "입고 시작 실패",
                 f"메시지: {msg or '알 수 없는 오류'}"
             )
+            return
+
+        QMessageBox.information(
+            self, "입고 시작",
+            f"다중-sshopy 입고 시나리오 dispatch\n"
+            f"우선순위: {', '.join(robot_ids) if robot_ids else '(기본값)'}\n"
+            f"총 입고 물량: {qty} (사이클당 -2)\n"
+            f"메시지: {msg or 'ok'}"
+        )
+
+        # [입고물량loop] 완료 감지 폴링 시작 — active=True→False 전이 시 완료 메시지.
+        self._inbound_was_active = False
+        self.btn_inbound.setEnabled(False)
+        self._inbound_poll_timer.start()
+
+    def _poll_inbound_status(self):
+        """[입고물량loop] /api/inbound/status 폴링 — active False 전이 시 완료 메시지 + 종료."""
+        try:
+            status = self.api.inbound_status() or {}
+        except Exception:
+            # 일시적 통신 오류는 무시 — 다음 tick 에서 재시도
+            return
+
+        active = bool(status.get("active"))
+        if active:
+            self._inbound_was_active = True
+            return
+
+        # 시작 직후 active 가 아직 True 로 반영 안 됐을 수 있으므로,
+        # 한 번 active=True 를 본 뒤 False 로 전이된 경우에만 '완료' 처리.
+        if not self._inbound_was_active:
+            return
+
+        self._inbound_poll_timer.stop()
+        self._inbound_was_active = False
+        self.btn_inbound.setEnabled(True)
+
+        total = status.get("total_quantity", 0) or 0
+        QMessageBox.information(
+            self, "입고 완료",
+            f"총 입고 물량 {total}개 입고 완료.\n"
+            f"모든 유휴 sshopy 워커가 종료되었습니다."
+        )
 
     # ── Data update slots (called by MainWindow) ──────────────────────────
 
