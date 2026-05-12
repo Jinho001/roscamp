@@ -380,11 +380,10 @@ class YOLOResultServer:
     수신 프로토콜: [4bytes big-endian 길이] + [JSON bytes]
     """
 
-    def __init__(self, ai_server_ip: str, ai_server_port: int, robot_bridge=None, goal_bridge=None):
-        self.ai_server_ip   = ai_server_ip
-        self.ai_server_port = ai_server_port
-        self.robot_bridge   = robot_bridge
-        self.goal_bridge    = goal_bridge
+    def __init__(self, listen_ip: str, listen_port: int, robot_bridge=None):
+        self.listen_ip     = listen_ip
+        self.listen_port   = listen_port
+        self.robot_bridge  = robot_bridge
         self.latest_seat_status: Optional[list] = None
         self.latest_result: Optional[dict] = None
         self._lock   = threading.Lock()
@@ -462,23 +461,15 @@ class YOLOResultServer:
             else:
                 with self._lock:
                     self.latest_result = result
-
-                msg = (
-                    f"[TCP 수신 완료] "
+                logger.info(
+                    f"[YOLO 결과 수신] from={addr} "
                     f"type={result.get('type')} "
                     f"frame_id={result.get('frame_id')} "
                     f"goals={len(result.get('goals') or [])} "
                     f"process_ms={result.get('process_ms')}ms"
                 )
-                if not self._announced:
-                    logger.info(msg)
-                    self._announced = True
-                self._backlog_logger.info(msg)
-
                 if self.robot_bridge is not None:
                     self.robot_bridge.handle_result(result)
-                if self.goal_bridge is not None:
-                    self.goal_bridge.handle_result(result, length)
                 self._forward_to_cam_ui(raw_data)
 
     def _forward_to_cam_ui(self, raw_data: bytes):
@@ -599,8 +590,13 @@ class VisionRobotBridge:
         self.robot_id = robot_id
 
     def handle_result(self, result: dict):
+        frame_id = result.get("frame_id")
         goals = result.get("goals") or []
+
         if not goals:
+            logger.info(
+                f"[VISION->PINKY] frame_id={frame_id} hand_raise goal 없음 - 명령 없음"
+            )
             return
 
         for goal in goals:
@@ -610,9 +606,22 @@ class VisionRobotBridge:
             theta = map_goal.get("theta", 0.0)
 
             if x is None or y is None:
+                logger.warning(
+                    f"[VISION->PINKY] frame_id={frame_id} map 좌표 없음: {goal}"
+                )
                 continue
 
-            fleet.goal_pose(self.robot_id, float(x), float(y), float(theta))
+            ok = fleet.goal_pose(self.robot_id, float(x), float(y), float(theta))
+            if ok:
+                logger.warning(
+                    f"[VISION->PINKY] hands_up goal 전송 → robot={self.robot_id} "
+                    f"x={float(x):.3f} y={float(y):.3f} theta={float(theta):.3f}"
+                )
+            else:
+                logger.warning(
+                    f"[VISION->PINKY] robot={self.robot_id} goal_pose 실패 "
+                    f"(연결 상태 확인 필요)"
+                )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -630,32 +639,22 @@ class CameraUDPServer:
         forward_ip="192.168.1.121",
         forward_port=6006,
     ):
-        import queue as _queue
         self.listen_ip = listen_ip
         self.listen_port = listen_port
         self.forward_ip = forward_ip
         self.forward_port = forward_port
-        self._backlog: _queue.Queue = _queue.Queue(maxsize=8)
-        self._thread      = threading.Thread(target=self._run,    daemon=True)
-        self._send_thread = threading.Thread(target=self._sender, daemon=True)
-
-        # UDP/ 디렉터리에 백로그 파일 기록용 로거 (최대 30줄 유지)
-        _log_path = Path(__file__).parent / "UDP" / "udp_backlog.log"
-        self._backlog_logger = logging.getLogger("udp_backlog")
-        if not self._backlog_logger.handlers:
-            _fh = _MaxLinesFileHandler(_log_path, max_lines=30)
-            _fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-            self._backlog_logger.addHandler(_fh)
-            self._backlog_logger.setLevel(logging.INFO)
-            self._backlog_logger.propagate = False
+        self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
         self._thread.start()
-        self._send_thread.start()
         logger.info(
             f"CameraUDPServer 시작: {self.listen_ip}:{self.listen_port} "
             f"-> AI UDP {self.forward_ip}:{self.forward_port}"
         )
+
+    # 송신측(picam.py) 헤더 포맷: !IHH = frame_id(4B) + chunk_idx(2B) + total(2B)
+    _CAM_HDR_FMT  = '!IHH'
+    _CAM_HDR_SIZE = struct.calcsize('!IHH')  # 8 bytes
 
     # ── 수신 스레드: 청크 재조립 → 백로그 큐에 적재 ──────────────
     def _run(self):
@@ -670,61 +669,43 @@ class CameraUDPServer:
             try:
                 data, addr = recv_sock.recvfrom(UDP_MAX_PACKET)
 
-                if len(data) < HDR_SIZE:
+                if len(data) < self._CAM_HDR_SIZE:
                     continue
 
-                magic, frame_id, chunk_idx, total, pkt_type, _ = struct.unpack(
-                    HDR_FMT, data[:HDR_SIZE]
+                frame_id, chunk_idx, total = struct.unpack(
+                    self._CAM_HDR_FMT, data[:self._CAM_HDR_SIZE]
                 )
 
-                if magic != MAGIC or total == 0 or chunk_idx >= total:
+                if total == 0 or chunk_idx >= total:
                     continue
 
-                if pkt_type == PKT_HEARTBEAT:
-                    continue
-
-                result = frame_buf.add_chunk(frame_id, chunk_idx, total, data[HDR_SIZE:])
+                result = frame_buf.add_chunk(frame_id, chunk_idx, total, data[self._CAM_HDR_SIZE:])
                 if result is None:
                     continue
-
-                meta, jpeg = result
-                try:
-                    self._backlog.put_nowait((frame_id, meta, jpeg))
-                except Exception:
-                    # 큐 가득 찬 경우 가장 오래된 항목 버리고 최신으로 교체
-                    try:
-                        self._backlog.get_nowait()
-                    except Exception:
-                        pass
-                    self._backlog.put_nowait((frame_id, meta, jpeg))
 
             except Exception as e:
                 logger.error(f"CameraUDPServer recv error: {e}")
 
-    # ── 송신 스레드: 백로그 큐에서 꺼내 AI 서버로 전달 ──────────
-    def _sender(self):
-        fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        fwd_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, UDP_SEND_BUF)
-        dest = (self.forward_ip, self.forward_port)
-        _announced = False
+    def _forward_to_ai_server(self, raw_data: bytes):
+        try:
+            fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            fwd_sock.sendto(raw_data, (self.forward_ip, self.forward_port))
+            fwd_sock.close()
+            logger.info(
+                f"[UDP FORWARD] AI server={self.forward_ip}:{self.forward_port}, "
+                f"bytes={len(raw_data)}"
+            )
+        except Exception as e:
+            logger.warning(f"AI server UDP forward 실패: {e}")
 
-        while True:
-            try:
-                frame_id, meta, jpeg = self._backlog.get()
-                send_udp_message(fwd_sock, frame_id, meta, jpeg, dest=dest)
-
-                msg = (
-                    f"[UDP 송수신 완료] "
-                    f"frame={frame_id} robot={meta.get('robot_id')} "
-                    f"size={len(jpeg)}B → {self.forward_ip}:{self.forward_port}"
-                )
-                if not _announced:
-                    logger.info(msg)
-                    _announced = True
-                self._backlog_logger.info(msg)
-
-            except Exception as e:
-                logger.error(f"CameraUDPServer send error: {e}")
+    def _forward_to_cam_ui(self, raw_data: bytes):
+        try:
+            fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            fwd_sock.connect((os.getenv("CAM_UI_IP"), int(os.getenv("CAM_UI_PORT"))))
+            fwd_sock.sendall(struct.pack("!I", len(raw_data)) + raw_data)
+            fwd_sock.close()
+        except Exception as e:
+            logger.warning(f"Camera UI forward 실패: {e}")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -934,27 +915,10 @@ async def lifespan(app: FastAPI):
     vision_robot_bridge = VisionRobotBridge(
         robot_id=os.getenv("PINKYPRO_ROBOT_ID", "sshopy2")
     )
-
-    # ROS2 TcpGoalBridge 초기화 (rclpy 사용 가능한 환경에서만)
-    tcp_goal_bridge = None
-    if _ROS2_AVAILABLE:
-        rclpy.init()
-        tcp_goal_bridge = TcpGoalBridge(
-            topic_name=os.getenv("HAND_RAISE_TOPIC", "/hand_raise_goal"),
-            frame_id="map",
-            cooldown_sec=1.0,
-        )
-        tcp_goal_bridge.get_logger().set_level(rclpy.logging.LoggingSeverity.WARN)
-        threading.Thread(target=rclpy.spin, args=(tcp_goal_bridge,), daemon=True).start()
-        logger.info(f"TcpGoalBridge 시작 (ROS_DOMAIN_ID={os.getenv('ROS_DOMAIN_ID', '?')})")
-    else:
-        logger.warning("rclpy 없음 — TcpGoalBridge 비활성화")
-
     yolo_result_server = YOLOResultServer(
-        ai_server_ip=os.getenv('YOLO_SERVER_IP'),
-        ai_server_port=int(os.getenv('YOLO_RESULT_LISTEN_PORT')),
+        listen_ip=os.getenv('YOLO_RESULT_LISTEN_IP'),
+        listen_port= int(os.getenv('YOLO_RESULT_LISTEN_PORT')),
         robot_bridge=vision_robot_bridge,
-        goal_bridge=tcp_goal_bridge,
     )
     yolo_result_server.start()
     _yolo_result_server = yolo_result_server
