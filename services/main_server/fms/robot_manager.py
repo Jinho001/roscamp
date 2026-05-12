@@ -10,9 +10,9 @@ Auto-reconnect behaviour:
   - React UI sees the change within the next WebSocket heartbeat (1 s).
 
 Delivery scenario (start_delivery):
-  stage 0: sshopy → 창고(0.264, 0.509) 이동 → 도착 → ware_jet 팔 동작 → stage 1
-  stage 1: sshopy → 매장(0.918, 0.426) 이동 → 도착 → front_jet 팔 동작 → stage 2
-  stage 2: sshopy → 홈(1.086, 0.081) 복귀 → 도착 → 완료
+  stage 0: sshopy → 창고(0.098, 0.175) 이동 → 도착 → ware_jet 팔 동작 → stage 1
+  stage 1: sshopy → 매장(0.858, 0.523) 이동 → 도착 → front_jet 팔 동작 → stage 2
+  stage 2: sshopy → 홈(1.002, 0.077) 복귀 → 도착 → 완료
 """
 import sys, os
 sys.path.append(os.path.join(os.path.dirname(__file__), "../"))
@@ -41,10 +41,11 @@ CONNECT_TIMEOUT    = 4   # seconds to wait for initial / reconnect
 RECONNECT_INTERVAL = 5   # seconds between reconnect sweeps
 
 # ── 배달 시나리오 웨이포인트 ────────────────────────────────────────────────────
+# 0=창고(웨어젯), 1=매장(프론트젯), 2=홈(sshopy1 기준) — TRYON_*/TRYON_HOMES 와 동일 좌표
 WAYPOINTS = {
-    0: {"x": 0.264, "y": 0.509, "theta": 1.674},  # 창고
-    1: {"x": 0.918, "y": 0.426, "theta": 1.655},  # 매장
-    2: {"x": 1.086, "y": 0.081, "theta": -0.362},  # 홈
+    0: {"x":  0.098, "y": 0.175, "theta":  3.117},  # 창고
+    1: {"x":  0.858, "y": 0.523, "theta":  1.576},  # 매장
+    2: {"x":  1.002, "y": 0.077, "theta":  0.919},  # 홈
 }
 ARRIVAL_THRESHOLD = 0.3   # 도착 판정 거리 (m)
 ARRIVAL_COOLDOWN  = 5.0   # 같은 웨이포인트 중복 트리거 방지 (초)
@@ -56,9 +57,9 @@ def _q_to_theta(oz: float, ow: float) -> float:
     return 2.0 * math.atan2(oz, ow)
 
 # 창고 / 회수존 (시착 시나리오 공용)
-TRYON_WAREJET   = {"x": -0.003, "y": 0.160, "theta": _q_to_theta( 0.026, 1.000)}
-TRYON_FRONTJET  = {"x":  0.720, "y": 0.477, "theta": _q_to_theta( 0.686, 0.727)}
-WAREJET_SUBZONE = {"x":  0.010, "y": -0.038, "theta": _q_to_theta( 0.025, 1.000)}
+TRYON_WAREJET   = {"x":  0.098, "y": 0.175, "theta": _q_to_theta( 1.000, 0.012)}
+TRYON_FRONTJET  = {"x":  0.858, "y": 0.523, "theta": _q_to_theta( 0.709, 0.705)}
+WAREJET_SUBZONE = {"x":  0.120, "y": 0.184, "theta": _q_to_theta( 0.999, 0.049)}
 
 # 핑키별 홈위치 (sshopy1=1번핑기, sshopy2=2번핑키, sshopy3=3번핑키)
 TRYON_HOMES = {
@@ -75,10 +76,10 @@ def tryon_home(robot_id: str) -> dict:
 
 # 시착존 1~4
 TRYZONES = {
-    1: {"x": 1.047, "y": 0.136, "theta": _q_to_theta( 0.708, 0.706)},
-    2: {"x": 1.367, "y": 0.268, "theta": _q_to_theta( 1.000, 0.002)},
-    3: {"x": 1.217, "y": 0.550, "theta": _q_to_theta(-0.714, 0.700)},
-    4: {"x": 0.881, "y": 0.431, "theta": _q_to_theta(-0.020, 1.000)},
+    1: {"x": 1.256, "y": 0.202, "theta": _q_to_theta( 0.714,  0.700)},
+    2: {"x": 1.595, "y": 0.364, "theta": _q_to_theta( 1.000, -0.009)},
+    3: {"x": 1.417, "y": 0.602, "theta": _q_to_theta(-0.700,  0.715)},
+    4: {"x": 1.107, "y": 0.470, "theta": _q_to_theta( 0.007,  1.000)},
 }
 
 # 시착 시나리오 stage
