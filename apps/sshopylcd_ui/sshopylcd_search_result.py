@@ -12,6 +12,7 @@ SShopy LCD 검색 결과 페이지.
   비동기로 image_url 을 받아와 캐시. 실패해도 'IMG' 플레이스홀더 유지.
 """
 
+import os
 import threading
 import urllib.request
 from typing import Optional
@@ -26,6 +27,12 @@ from PySide6.QtGui import QPixmap
 from sshopylcd_common import (
     REF_W, REF_H, C_BG, C_DARK, C_FOREST, C_BROWN, C_BROWN_H, C_BORDER, C_SUB,
     TopBar, make_svg
+)
+
+# [이미지URL해결] DB의 image_url 은 파일명만 저장돼 있어 메인 서버 경로로 prepend 필요
+_SHOE_BASE_URL = "http://{}:{}".format(
+    os.environ.get("MOOSINSA_SERVICE_HOST", "localhost"),
+    os.environ.get("MOOSINSA_SERVICE_PORT", "8000"),
 )
 
 SVG_SEARCH_AGAIN = """<svg viewBox="0 0 32 32" fill="none"
@@ -73,11 +80,26 @@ def _apply_image(label: QLabel, data: bytes, size: int):
         label.setPixmap(pix)
 
 
-def _load_image_async(image_url: str, label: QLabel, size: int):
+# [이미지URL해결] kiosk_category_brand._resolve_image_url 와 동일 규칙:
+#   - 절대 URL(http/https) 은 그대로
+#   - "/" 시작은 base URL prepend
+#   - 그 외는 /shoes_images/{파일명}
+def _resolve_image_url(image_url: str) -> str:
     if not image_url:
+        return ""
+    if image_url.startswith(("http://", "https://")):
+        return image_url
+    if image_url.startswith("/"):
+        return f"{_SHOE_BASE_URL}{image_url}"
+    return f"{_SHOE_BASE_URL}/shoes_images/{image_url}"
+
+
+def _load_image_async(image_url: str, label: QLabel, size: int):
+    url = _resolve_image_url(image_url)  # [이미지URL해결]
+    if not url:
         return
-    if image_url in _img_cache:
-        data = _img_cache[image_url]
+    if url in _img_cache:
+        data = _img_cache[url]
         QTimer.singleShot(0, lambda: _apply_image(label, data, size))
         return
 
@@ -85,11 +107,11 @@ def _load_image_async(image_url: str, label: QLabel, size: int):
 
     def _worker():
         try:
-            data = urllib.request.urlopen(image_url, timeout=5).read()
-            _img_cache[image_url] = data
+            data = urllib.request.urlopen(url, timeout=5).read()
+            _img_cache[url] = data
             bridge.received.emit(label, data, size)
         except Exception as e:
-            print(f"[sshopylcd_search_result] 이미지 로드 실패 ({image_url}): {e}")
+            print(f"[sshopylcd_search_result] 이미지 로드 실패 ({url}): {e}")
 
     threading.Thread(target=_worker, daemon=True).start()
 
