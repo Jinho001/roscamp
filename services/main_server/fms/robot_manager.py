@@ -172,7 +172,8 @@ INBOUND_TIMEOUT = 300   # 각 단계별 timeout (초)
 
 # TODO(실로봇테스트): 데모용 임의 좌표 — 실제 매장에서는 shoe_id → 진열대 좌표
 # 매핑으로 교체. start_guide() 에서 shoe_id 별 lookup 으로 확장 예정.
-GUIDE_DEMO_TARGET = {"x": 0.918, "y": 0.426, "theta": 1.655}
+# [GUIDE_DEMO_TARGET-amcl] /amcl_pose 실측값으로 교체 (quaternion z=0.0604, w=0.9982 → yaw≈0.121 rad)
+GUIDE_DEMO_TARGET = {"x": 1.346, "y": 0.079, "theta": 0.121}
 
 GUIDE_STAGE_TO_SHELF = 40  # 진열대 이동 중
 GUIDE_STAGE_AT_SHELF = 41  # 진열대 도착 — 안내 종료 대기 (LCD polling)
