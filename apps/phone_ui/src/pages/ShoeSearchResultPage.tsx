@@ -71,7 +71,7 @@ export default function ShoeSearchResultPage() {
         </div>
 
 
-        <div className="search-page-title">전체 신발 보기</div>
+        <div className="search-page-title">신발 검색 결과</div>
         <div className="search-page-sub">총 {shoes.length}개의 상품</div>
 
         <div className="search-result-list">
