@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QDialog, QPlainTextEdit, QMessageBox,
     # [입고물량loop] 총 입고 물량 입력 팝업
     QInputDialog,
+    # [입고진행팝업] 진행률 시각화
+    QProgressBar,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui  import QColor, QFont
@@ -63,6 +65,102 @@ ROBOT_TASKS: dict[str, list[tuple[str, str, int | None]]] = {
 }
 
 
+# [입고진행팝업] 입고 데모 진행 상황 모달리스 다이얼로그.
+# _on_inbound() 가 시작 직후 띄우고, _poll_inbound_status() 가 매 tick 마다 update_status() 로
+# 남은 물량/사이클/로봇별 stage 를 갱신. active=False 전이 시 mark_done() 으로 닫기 버튼 활성화.
+class InboundProgressDialog(QDialog):
+    def __init__(self, total_quantity: int, robot_ids: list[str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("입고 진행 상황")
+        self.setModal(False)            # 사용자가 monitoring 화면을 계속 볼 수 있도록
+        self.setMinimumWidth(420)
+        self._total_quantity = max(int(total_quantity or 0), 0)
+        self._done = False
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(10)
+
+        self._title_lbl = QLabel("입고 진행 중…")
+        self._title_lbl.setStyleSheet("font-size:14px; font-weight:600; color:#0969da;")
+        lay.addWidget(self._title_lbl)
+
+        self._summary_lbl = QLabel(
+            f"우선순위: {', '.join(robot_ids) if robot_ids else '(기본값)'}"
+        )
+        self._summary_lbl.setStyleSheet("color:#57606a; font-size:11px;")
+        self._summary_lbl.setWordWrap(True)
+        lay.addWidget(self._summary_lbl)
+
+        self._quantity_lbl = QLabel("남은 물량: — / —")
+        self._quantity_lbl.setStyleSheet("font-size:13px;")
+        lay.addWidget(self._quantity_lbl)
+
+        self._cycle_lbl = QLabel("사이클: — / —")
+        self._cycle_lbl.setStyleSheet("color:#57606a; font-size:11px;")
+        lay.addWidget(self._cycle_lbl)
+
+        self._bar = QProgressBar()
+        self._bar.setRange(0, max(self._total_quantity, 1))
+        self._bar.setValue(0)
+        self._bar.setFormat("%v / %m")
+        lay.addWidget(self._bar)
+
+        self._robots_lbl = QLabel("로봇별 단계:\n  (대기 중…)")
+        self._robots_lbl.setStyleSheet(
+            "color:#1f2328; font-size:11px; font-family:'Courier New',monospace;"
+        )
+        self._robots_lbl.setWordWrap(True)
+        lay.addWidget(self._robots_lbl)
+
+        self._close_btn = QPushButton("입고 진행 중… (닫기 비활성)")
+        self._close_btn.setEnabled(False)        # 진행 중에는 닫을 수 없음
+        self._close_btn.clicked.connect(self.accept)
+        lay.addWidget(self._close_btn)
+
+    def update_status(self, status: dict):
+        """[입고진행팝업] /api/inbound/status 응답으로 라벨/프로그레스 갱신."""
+        if self._done:
+            return
+        total  = int(status.get("total_quantity") or self._total_quantity or 0)
+        remain = int(status.get("quantity_remaining") or 0)
+        done_qty = max(total - remain, 0)
+        tasks_total  = int(status.get("tasks_total") or 0)
+        tasks_remain = int(status.get("tasks_remaining") or 0)
+        cycle_done   = max(tasks_total - tasks_remain, 0)
+
+        self._quantity_lbl.setText(f"남은 물량: {remain} / {total}")
+        self._cycle_lbl.setText(f"사이클: {cycle_done} / {tasks_total}")
+        if total > 0:
+            self._bar.setRange(0, total)
+            self._bar.setValue(done_qty)
+
+        robots = status.get("robots") or {}
+        if robots:
+            lines = [
+                f"  {rid:<8s}  {info.get('stage_label', '—')}"
+                for rid, info in robots.items()
+            ]
+            self._robots_lbl.setText("로봇별 단계:\n" + "\n".join(lines))
+        else:
+            self._robots_lbl.setText("로봇별 단계:\n  (대기 중…)")
+
+    def mark_done(self, total_quantity: int):
+        """[입고진행팝업] active=True→False 전이 시 호출. 닫기 버튼 활성화."""
+        if self._done:
+            return
+        self._done = True
+        total = int(total_quantity or self._total_quantity or 0)
+        self._title_lbl.setText("입고 완료")
+        self._title_lbl.setStyleSheet("font-size:14px; font-weight:600; color:#1f883d;")
+        self._quantity_lbl.setText(f"남은 물량: 0 / {total}")
+        if total > 0:
+            self._bar.setRange(0, total)
+            self._bar.setValue(total)
+        self._close_btn.setText(f"입고 완료 확인 (총 {total}개)")
+        self._close_btn.setEnabled(True)
+
+
 # [white-theme] 카드 — 연한 회색 배경 + 보더
 def _card() -> QFrame:
     f = QFrame()
@@ -93,6 +191,9 @@ class MonitoringScreen(QWidget):
         self._inbound_poll_timer.setInterval(2000)
         self._inbound_poll_timer.timeout.connect(self._poll_inbound_status)
         self._inbound_was_active: bool = False
+        # [입고진행팝업] 진행 상황 모달리스 다이얼로그. _on_inbound 에서 생성, _poll_inbound_status
+        # 가 매 tick 마다 업데이트. 완료 후엔 사용자가 닫기 누를 때까지 유지.
+        self._inbound_dialog: InboundProgressDialog | None = None
         self._build_ui()
         self.apply_scale(1.0)
 
@@ -466,26 +567,46 @@ class MonitoringScreen(QWidget):
             )
             return
 
-        QMessageBox.information(
-            self, "입고 시작",
-            f"다중-sshopy 입고 시나리오 dispatch\n"
-            f"우선순위: {', '.join(robot_ids) if robot_ids else '(기본값)'}\n"
-            f"총 입고 물량: {qty} (사이클당 -2)\n"
-            f"메시지: {msg or 'ok'}"
+        # [입고진행팝업] 진행 모달리스 다이얼로그 띄움. 시작 안내 QMessageBox 는 제거 —
+        # 다이얼로그가 시작 안내 + 실시간 진행 + 완료 확인을 한 곳에서 처리한다.
+        # 이전 세션 다이얼로그가 남아있다면 먼저 닫는다 (정상 흐름에선 발생 안 함).
+        if self._inbound_dialog is not None:
+            try:
+                self._inbound_dialog.close()
+            except Exception:
+                pass
+            self._inbound_dialog = None
+
+        self._inbound_dialog = InboundProgressDialog(
+            total_quantity=qty,
+            robot_ids=robot_ids,
+            parent=self,
         )
+        # 닫힘 신호 — 사용자가 완료 후 닫기 누르면 참조 정리
+        self._inbound_dialog.finished.connect(self._on_inbound_dialog_finished)
+        self._inbound_dialog.show()
 
         # [입고물량loop] 완료 감지 폴링 시작 — active=True→False 전이 시 완료 메시지.
         self._inbound_was_active = False
         self.btn_inbound.setEnabled(False)
         self._inbound_poll_timer.start()
 
+    def _on_inbound_dialog_finished(self, _result: int):
+        """[입고진행팝업] 다이얼로그 닫힘 — 참조 정리. 폴링은 이미 stop 된 상태."""
+        self._inbound_dialog = None
+
     def _poll_inbound_status(self):
-        """[입고물량loop] /api/inbound/status 폴링 — active False 전이 시 완료 메시지 + 종료."""
+        """[입고물량loop] /api/inbound/status 폴링 — active False 전이 시 완료 메시지 + 종료.
+        [입고진행팝업] 매 tick 마다 다이얼로그에 진행 상황 푸시. 완료 시 닫기 버튼 활성화."""
         try:
             status = self.api.inbound_status() or {}
         except Exception:
             # 일시적 통신 오류는 무시 — 다음 tick 에서 재시도
             return
+
+        # [입고진행팝업] 다이얼로그가 살아있으면 매번 갱신
+        if self._inbound_dialog is not None:
+            self._inbound_dialog.update_status(status)
 
         active = bool(status.get("active"))
         if active:
@@ -502,11 +623,16 @@ class MonitoringScreen(QWidget):
         self.btn_inbound.setEnabled(True)
 
         total = status.get("total_quantity", 0) or 0
-        QMessageBox.information(
-            self, "입고 완료",
-            f"총 입고 물량 {total}개 입고 완료.\n"
-            f"모든 유휴 sshopy 워커가 종료되었습니다."
-        )
+        # [입고진행팝업] 완료 상태로 전환 — 다이얼로그는 사용자가 닫을 때까지 유지.
+        if self._inbound_dialog is not None:
+            self._inbound_dialog.mark_done(total)
+        else:
+            # 다이얼로그가 이미 닫혀있는 예외 케이스만 별도 메시지 표시
+            QMessageBox.information(
+                self, "입고 완료",
+                f"총 입고 물량 {total}개 입고 완료.\n"
+                f"모든 유휴 sshopy 워커가 종료되었습니다."
+            )
 
     # ── Data update slots (called by MainWindow) ──────────────────────────
 
