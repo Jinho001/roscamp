@@ -72,6 +72,12 @@ LOST_FRAMES   = 60
 SEAT_SAVE     = Path("/home/team1-ai/roscamp-repo-1/services/ai_server/seats.json")
 DEBOUNCE_SECS = 30
 SEAT_SEND_INTERVAL = 1.0
+ROI_EMPTY_SAVE = Path(__file__).parent / "roi_empty_areas.json"
+ROI_MIN_DECREASE = 200
+ROI_SOL_CHANGE = 0.10
+ROI_REACH_CHANGE = 0.35
+ROI_REACH_THRESH = 1.65
+ROI_CONFIG_SAVE = Path(__file__).parent / "roi_otsu_config.json"
 
 # ── AI 동작 모드 ──────────────────────────────────────────────────────
 MODE_SEAT   = 5   # 자리 점유 인식만
@@ -323,6 +329,251 @@ def load_seats():
     return []
 
 
+class RoiOtsuSeatOccupancy:
+    """ROI empty 기준과 현재 Otsu 마스크 변화를 비교해 좌석 점유를 판단한다."""
+
+    def __init__(self, baseline_path: Path,
+                 min_decrease: int = ROI_MIN_DECREASE,
+                 sol_change: float = ROI_SOL_CHANGE,
+                 reach_change: float = ROI_REACH_CHANGE,
+                 reach_thresh: float = ROI_REACH_THRESH):
+        self.baseline_path = baseline_path
+        self.config_path = ROI_CONFIG_SAVE
+        self.min_decrease = min_decrease
+        self.sol_change = sol_change
+        self.reach_change = reach_change
+        self.reach_thresh = reach_thresh
+        self._load_config()
+        self.empty_areas = self._load_baselines()
+        self.control_window = "ROI Otsu Controls"
+        self._controls_ready = False
+
+    @property
+    def has_baseline(self):
+        return bool(self.empty_areas)
+
+    def create_controls(self):
+        if self._controls_ready:
+            return
+
+        try:
+            cv2.namedWindow(self.control_window, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.control_window, 460, 160)
+            cv2.createTrackbar("white_delta", self.control_window,
+                               int(self.min_decrease), 5000, self._on_white_delta)
+            cv2.createTrackbar("sol_delta x100", self.control_window,
+                               int(self.sol_change * 100), 100, self._on_sol_delta)
+            cv2.createTrackbar("reach_delta x100", self.control_window,
+                               int(self.reach_change * 100), 200, self._on_reach_delta)
+            cv2.createTrackbar("reach_abs x100", self.control_window,
+                               int(self.reach_thresh * 100), 300, self._on_reach_abs)
+            self._controls_ready = True
+        except cv2.error as e:
+            print(f"[WARN] ROI Otsu Controls 창 생성 실패: {e}")
+
+    def save_config(self):
+        data = {
+            "white_delta": self.min_decrease,
+            "sol_delta": self.sol_change,
+            "reach_delta": self.reach_change,
+            "reach_abs": self.reach_thresh,
+        }
+        self.config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return data
+
+    def reset_config(self):
+        self.min_decrease = ROI_MIN_DECREASE
+        self.sol_change = ROI_SOL_CHANGE
+        self.reach_change = ROI_REACH_CHANGE
+        self.reach_thresh = ROI_REACH_THRESH
+        self._sync_controls()
+        return self.save_config()
+
+    def _load_config(self):
+        if not self.config_path.exists():
+            return
+
+        data = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.min_decrease = int(data.get("white_delta", self.min_decrease))
+        self.sol_change = float(data.get("sol_delta", self.sol_change))
+        self.reach_change = float(data.get("reach_delta", self.reach_change))
+        self.reach_thresh = float(data.get("reach_abs", self.reach_thresh))
+
+    def _sync_controls(self):
+        if not self._controls_ready:
+            return
+        cv2.setTrackbarPos("white_delta", self.control_window, int(self.min_decrease))
+        cv2.setTrackbarPos("sol_delta x100", self.control_window,
+                           int(self.sol_change * 100))
+        cv2.setTrackbarPos("reach_delta x100", self.control_window,
+                           int(self.reach_change * 100))
+        cv2.setTrackbarPos("reach_abs x100", self.control_window,
+                           int(self.reach_thresh * 100))
+
+    def _on_white_delta(self, value):
+        self.min_decrease = max(0, int(value))
+
+    def _on_sol_delta(self, value):
+        self.sol_change = max(0.0, value / 100.0)
+
+    def _on_reach_delta(self, value):
+        self.reach_change = max(0.0, value / 100.0)
+
+    def _on_reach_abs(self, value):
+        self.reach_thresh = max(0.0, value / 100.0)
+
+    def _load_baselines(self):
+        if not self.baseline_path.exists():
+            return {}
+
+        raw = json.loads(self.baseline_path.read_text())
+        baselines = {}
+        for key, value in raw.items():
+            seat_idx = int(key)
+            if isinstance(value, dict):
+                baselines[seat_idx] = {
+                    "white": int(value.get("white", 0)),
+                    "sol": value.get("sol"),
+                    "reach": value.get("reach"),
+                }
+            else:
+                baselines[seat_idx] = {"white": int(value), "sol": None, "reach": None}
+        return baselines
+
+    def save_empty_baseline(self, frame, rois):
+        baselines = {}
+        for idx, roi in enumerate(rois):
+            _, white, sol, reach = self.get_roi_stats(frame, roi)
+            baselines[idx] = {"white": white, "sol": sol, "reach": reach}
+
+        self.empty_areas = baselines
+        self.baseline_path.write_text(json.dumps(baselines), encoding="utf-8")
+        return baselines
+
+    def predict(self, frame, rois):
+        seat_status = []
+        for idx, roi in enumerate(rois):
+            occupied, _ = self.evaluate(frame, roi, idx)
+            seat_status.append((roi, occupied))
+        return seat_status
+
+    def evaluate(self, frame, roi, idx):
+        _, white, sol, reach = self.get_roi_stats(frame, roi)
+        base = self.empty_areas.get(idx)
+        if base is None:
+            return False, {
+                "white": white, "sol": sol, "reach": reach,
+                "white_delta": 0, "sol_delta": 0.0, "reach_delta": 0.0,
+                "white_changed": False, "sol_changed": False, "reach_changed": False,
+            }
+
+        white_delta = white - base["white"]
+        white_changed = abs(white_delta) > self.min_decrease
+
+        base_sol = base.get("sol")
+        sol_delta = abs(sol - float(base_sol)) if base_sol is not None else 0.0
+        sol_changed = base_sol is not None and sol_delta > self.sol_change
+
+        base_reach = base.get("reach")
+        reach_delta = (
+            abs(reach - float(base_reach)) if base_reach is not None else 0.0
+        )
+        reach_changed = (
+            reach > self.reach_thresh
+            or (base_reach is not None and reach_delta > self.reach_change)
+        )
+
+        return white_changed or sol_changed or reach_changed, {
+            "white": white,
+            "sol": sol,
+            "reach": reach,
+            "white_delta": white_delta,
+            "sol_delta": sol_delta,
+            "reach_delta": reach_delta,
+            "white_changed": white_changed,
+            "sol_changed": sol_changed,
+            "reach_changed": reach_changed,
+        }
+
+    def build_mask_view(self, frame, rois, size=(120, 120)):
+        views = []
+        for idx, roi in enumerate(rois):
+            mask, _, _, _ = self.get_roi_stats(frame, roi)
+            if mask is None:
+                continue
+            occupied, stats = self.evaluate(frame, roi, idx)
+            view = cv2.cvtColor(cv2.resize(mask, size), cv2.COLOR_GRAY2BGR)
+            status = "OCC" if occupied else "EMPTY"
+            color = (0, 60, 255) if occupied else (0, 220, 80)
+            cv2.putText(view, f"#{idx + 1} {status}",
+                        (4, 18), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.35, color, 1)
+            cv2.putText(view, f"dw={stats['white_delta']:+d}",
+                        (4, 38), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.32, (0, 255, 255), 1)
+            cv2.putText(view, f"ds={stats['sol_delta']:.2f}",
+                        (4, 56), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.32, (0, 255, 255), 1)
+            cv2.putText(view, f"r={stats['reach']:.2f}",
+                        (4, 74), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.32, (0, 255, 255), 1)
+            views.append(view)
+
+        if not views:
+            return None
+
+        height = max(view.shape[0] for view in views)
+        row = np.hstack([
+            np.pad(view, ((0, height - view.shape[0]), (0, 0), (0, 0)),
+                   constant_values=50)
+            for view in views
+        ])
+        info_h = 38
+        info = np.zeros((info_h, row.shape[1], 3), dtype=np.uint8)
+        cv2.putText(
+            info,
+            f"white>{self.min_decrease}  sol>{self.sol_change:.2f}  "
+            f"reach_delta>{self.reach_change:.2f}  reach_abs>{self.reach_thresh:.2f}",
+            (6, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 1)
+        return np.vstack([info, row])
+
+    def get_roi_stats(self, frame, roi):
+        x1, y1, x2, y2 = roi
+        crop = frame[max(0, y1):y2, max(0, x1):x2]
+        if crop.size == 0:
+            return None, 0, 0.0, 0.0
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, mask = cv2.threshold(
+            blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        border = np.concatenate([mask[0, :], mask[-1, :], mask[:, 0], mask[:, -1]])
+        if np.mean(border) > 128:
+            mask = cv2.bitwise_not(mask)
+
+        white_pixels = int(np.sum(mask == 255))
+        solidity = self._solidity(mask)
+        reach = self._reach_ratio(mask)
+        return mask, white_pixels, round(solidity, 3), round(reach, 3)
+
+    def _solidity(self, mask):
+        cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return 0.0
+        cnt = max(cnts, key=cv2.contourArea)
+        cnt_area = cv2.contourArea(cnt)
+        hull_area = cv2.contourArea(cv2.convexHull(cnt))
+        return cnt_area / (hull_area + 1e-6) if hull_area > 0 else 0.0
+
+    def _reach_ratio(self, mask):
+        pts = np.argwhere(mask > 0).astype(np.float32)
+        if len(pts) < 30:
+            return 0.0
+        dists = np.linalg.norm(pts - pts.mean(axis=0), axis=1)
+        return float(np.percentile(dists, 95) / (dists.mean() + 1e-6))
+
+
 def classify_pose_geometric(frame, x1, y1, x2, y2, sol_thresh, reach_thresh):
     pad = 6
     h_img, w_img = frame.shape[:2]
@@ -392,11 +643,13 @@ def _roi_hit(x, y):
 def on_mouse(event, x, y, flags, param):
     global roi_size, mouse_pos, drag_idx, drag_offset
     mouse_pos = (x, y)
-
     if event == cv2.EVENT_MOUSEWHEEL:
-        roi_size = max(20, min(400, roi_size + (10 if flags > 0 else -10)))
-        seat_rois[:] = resize_all_rois(seat_rois, roi_size)
-        save_seats(seat_rois)
+        return
+
+    # if event == cv2.EVENT_MOUSEWHEEL:
+    #     roi_size = max(20, min(400, roi_size + (10 if flags > 0 else -10)))
+    #     seat_rois[:] = resize_all_rois(seat_rois, roi_size)
+    #     save_seats(seat_rois)
 
     elif event == cv2.EVENT_LBUTTONDOWN:
         if selected_roi >= 0:
@@ -468,13 +721,18 @@ class HandsSeatAI:
 
         # 수신·추론 분리 큐 (maxsize=1: 항상 최신 프레임만 유지)
         self._frame_queue = queue.Queue(maxsize=1)
-        threading.Thread(target=self._udp_receiver, daemon=True).start()
 
         # 좌석 ROI
         global seat_rois
         seat_rois = load_seats()
         if seat_rois:
             print(f"[INFO] 저장된 좌석 {len(seat_rois)}개 불러옴")
+        self._roi_otsu = RoiOtsuSeatOccupancy(ROI_EMPTY_SAVE)
+        if self._roi_otsu.has_baseline:
+            print(f"[INFO] ROI Otsu empty 기준 로드됨: {ROI_EMPTY_SAVE}")
+        else:
+            print("[INFO] ROI Otsu empty 기준 없음 → [E] 키로 저장")
+        self._roi_otsu.create_controls()
 
         # 포즈/추적 상태
         self._last_pub_t       = 0.0
@@ -495,6 +753,7 @@ class HandsSeatAI:
         self._last_seat_send   = 0.0
         self._fig_boxes        = []   # figure 모델 bbox (이전 프레임, 포즈 필터링용)
         self._ai_mode          = MODE_ALL
+        self._latest_frame_for_roi = None
 
         # FPS
         self._fps_count  = 0
@@ -510,6 +769,7 @@ class HandsSeatAI:
         self._last_model_frame_id = None
 
         self._running = True
+        threading.Thread(target=self._udp_receiver, daemon=True).start()
 
         # 좌석 점유 분류기 (학습 후 활성화)
         cls_path = Path(__file__).parent / "robot_model" / "occupancy_cls" / "weights" / "best.pt"
@@ -523,7 +783,13 @@ class HandsSeatAI:
         self.viewer = MultiRobotViewer(self.WIN, main_robot_no=6)
         cv2.setMouseCallback(self.WIN, on_mouse)
 
-        print("[INFO] 시작  [1~4] 좌석선택  [7] 타겟표시 ON/OFF  [A] 자동추적 ON/OFF  [R] 타겟초기화  [Z] 좌석삭제  [+/-] ROI크기  [5/6/8] 모드  [Q] 종료")
+        print("[INFO] 시작  [1~4] 좌석선택  [E] empty기준저장  [S] Otsu설정저장  [D] Otsu설정초기화  [7] 타겟표시 ON/OFF  [A] 자동추적 ON/OFF  [R] 타겟초기화  [Z] 좌석삭제  [+/-] ROI크기  [5/6/8] 모드  [Q] 종료")
+        print("[ROI Otsu Controls]")
+        print("  white_delta     : empty 대비 흰 픽셀 변화량 임계값. 낮추면 더 민감.")
+        print("  sol_delta x100  : solidity 변화량 임계값. 10은 0.10 의미.")
+        print("  reach_delta x100: empty 대비 reach 변화량 임계값. 35는 0.35 의미.")
+        print("  reach_abs x100  : 현재 reach 절대 임계값. 165는 1.65 의미.")
+        print("  권장 순서: 물건 없는 상태에서 [E] → 물건 올림 → ROI Otsu Masks 수치 보며 트랙바 조절")
 
     # ── PNG 청크 버퍼 만료 정리 ───────────────────────────────────────
     def _cleanup_frames(self):
@@ -686,28 +952,38 @@ class HandsSeatAI:
         annotated = frame.copy()
         t0        = time.time()
         pinky_pose_result = None
+        self._latest_frame_for_roi = frame.copy()
 
         run_pose = self._ai_mode in (MODE_POSE, MODE_ALL)
         run_seat = self._ai_mode in (MODE_SEAT, MODE_TARGET, MODE_ALL)
         run_target = self._target_enabled and self._ai_mode in (MODE_POSE, MODE_TARGET, MODE_ALL)
 
-        # ── 1) 포즈 감지 ──────────────────────────────────────────────
-        if run_pose:
-            detections, goals = self._detect_pose(
-                frame, annotated, fw, fh, robot_id, frame_id_meta)
-        else:
+        try:
+            # ── 1) 포즈 감지 ──────────────────────────────────────────────
+            if run_pose:
+                detections, goals = self._detect_pose(
+                    frame, annotated, fw, fh, robot_id, frame_id_meta)
+            else:
+                detections, goals = [], []
+
+            if is_pinky_pro_robot(robot_id):
+                pinky_pose_result = self.pinky_pose.process(annotated, robot_id)
+
+            # ── 2) 피규어 + 좌석 감지 ────────────────────────────────────
+            if run_seat or run_target:
+                seat_status = self._detect_seat(
+                    frame, annotated, fw, fh, draw_seats=run_seat)
+            else:
+                seat_status = []
+                self._target_ids = []
+        except Exception as e:
+            print(f"[LOOP] 프레임 처리 오류: {type(e).__name__}: {e}")
             detections, goals = [], []
-
-        if is_pinky_pro_robot(robot_id):
-            pinky_pose_result = self.pinky_pose.process(annotated, robot_id)
-
-        # ── 2) 피규어 + 좌석 감지 ────────────────────────────────────
-        if run_seat or run_target:
-            seat_status = self._detect_seat(
-                frame, annotated, fw, fh, draw_seats=run_seat)
-        else:
             seat_status = []
-            self._target_ids = []
+            pinky_pose_result = None
+            cv2.putText(annotated, "[UDP LIVE / AI ERROR]",
+                        (15, fh - 18), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65, (0, 80, 255), 2)
 
         # ── 모드 표시 ─────────────────────────────────────────────────
         _MODE_LABEL = {MODE_SEAT: "5:SEAT", MODE_POSE: "6:POSE",
@@ -747,13 +1023,16 @@ class HandsSeatAI:
             })
             self._last_seat_send = time.time()
 
+        self._show_frame(robot_id, annotated, fw, fh)
+
+    def _show_frame(self, robot_id, frame, fw, fh):
         # ── 화면 표시는 별도 viewer 모듈에 위임 ───────────────────────
         if DISPLAY_SCALE != 1.0:
             dw = int(fw * DISPLAY_SCALE)
             dh = int(fh * DISPLAY_SCALE)
-            display = cv2.resize(annotated, (dw, dh), interpolation=cv2.INTER_LINEAR)
+            display = cv2.resize(frame, (dw, dh), interpolation=cv2.INTER_LINEAR)
         else:
-            display = annotated
+            display = frame
         self.viewer.update(robot_id, display)
         self._handle_key(self.viewer.show())
 
@@ -849,6 +1128,7 @@ class HandsSeatAI:
         else:
             self._frozen_frame = None
             base = frame
+        self._latest_frame_for_roi = base.copy()
 
         fig_results = self.figure_model.track(
             base, persist=True, conf=0.3, verbose=False)
@@ -903,7 +1183,9 @@ class HandsSeatAI:
         self._target_ids = [d[0] for d in all_fig_dets
                             if d[0] in self._confirmed_fig_ids] if self._target_enabled else []
 
-        if self._occ_cls and seat_rois:
+        if self._roi_otsu.has_baseline and seat_rois:
+            seat_status = self._roi_otsu.predict(base, seat_rois)
+        elif self._occ_cls and seat_rois:
             seat_status = []
             for roi in seat_rois:
                 x1, y1, x2, y2 = roi
@@ -1003,6 +1285,11 @@ class HandsSeatAI:
             cv2.putText(annotated, f"Seats: {occ_cnt}/{len(seat_rois)} occupied",
                         (fw - 290, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
 
+        if draw_seats and seat_rois:
+            mask_view = self._roi_otsu.build_mask_view(base, seat_rois)
+            if mask_view is not None:
+                cv2.imshow("ROI Otsu Masks", mask_view)
+
         if self._target_enabled:
             if not self._target_ids:
                 stxt, scol = "Targets: 0", COLOR_GREEN
@@ -1054,6 +1341,17 @@ class HandsSeatAI:
         elif key in (ord('c'), ord('v')):
             label = "empty" if key == ord('c') else "occupied"
             self._save_roi_crops(label)
+
+        elif key in (ord('e'), ord('E')):
+            self._save_roi_empty_baseline()
+
+        elif key in (ord('s'), ord('S')):
+            data = self._roi_otsu.save_config()
+            print(f"[ROI] Otsu 설정 저장 완료: {ROI_CONFIG_SAVE} {data}")
+
+        elif key in (ord('d'), ord('D')):
+            data = self._roi_otsu.reset_config()
+            print(f"[ROI] Otsu 설정 기본값 초기화 완료: {ROI_CONFIG_SAVE} {data}")
 
         elif key == ord('g'):
             if selected_roi >= 0 and selected_roi < len(seat_rois):
@@ -1120,11 +1418,10 @@ class HandsSeatAI:
         if not seat_rois:
             print("[WARN] 저장된 좌석 ROI 없음")
             return
-        frame_q = list(self._frame_queue.queue)
-        if not frame_q:
+        frame = self._latest_frame_for_roi
+        if frame is None:
             print("[WARN] 현재 프레임 없음")
             return
-        frame, _ = frame_q[-1]
         save_dir = Path(__file__).parent / "roi_dataset" / label
         save_dir.mkdir(parents=True, exist_ok=True)
         ts = int(time.time() * 1000)
@@ -1135,6 +1432,25 @@ class HandsSeatAI:
             path = save_dir / f"seat{i+1}_{ts}.jpg"
             cv2.imwrite(str(path), crop)
         print(f"[DATA] {label} 이미지 {len(seat_rois)}장 저장 → roi_dataset/{label}/")
+
+    def _save_roi_empty_baseline(self):
+        if not seat_rois:
+            print("[WARN] 저장된 좌석 ROI 없음")
+            return
+        frame = self._latest_frame_for_roi
+        if frame is None:
+            print("[WARN] 현재 프레임 없음")
+            return
+
+        baselines = self._roi_otsu.save_empty_baseline(frame, seat_rois)
+        for idx, stat in baselines.items():
+            print(
+                f"[EMPTY] 좌석 #{idx + 1} "
+                f"white={stat['white']} "
+                f"sol={float(stat['sol']):.3f} "
+                f"reach={float(stat['reach']):.3f}"
+            )
+        print(f"[EMPTY] ROI Otsu 기준 저장/갱신 완료: {ROI_EMPTY_SAVE}")
 
     def close(self):
         self.udp_sock.close()
