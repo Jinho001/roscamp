@@ -94,6 +94,26 @@ def recv_exact_bytes(sock: socket.socket, n: int):
     return buf
 
 
+def normalize_seat_status(seats):
+    """프론트가 쓰는 [{"seat_id": int, "occupied": bool}, ...] 형태로 맞춘다."""
+    if not isinstance(seats, list):
+        return seats
+
+    normalized = []
+    for idx, item in enumerate(seats, start=1):
+        if isinstance(item, dict):
+            seat_id = item.get("seat_id", idx)
+            occupied = item.get("occupied", False)
+        else:
+            seat_id = idx
+            occupied = item
+        normalized.append({
+            "seat_id": int(seat_id),
+            "occupied": bool(occupied),
+        })
+    return normalized
+
+
 # ══════════════════════════════════════════════════════════════════════
 # ROS2 노드
 # ══════════════════════════════════════════════════════════════════════
@@ -318,6 +338,7 @@ class YOLOResultServer:
                     seats = result.get("seats")
                     if seats is None:
                         seats = result.get("seat_status")
+                    seats = normalize_seat_status(seats)
                     with self._lock:
                         self.latest_seat_status = seats
                     _write_tcp_backlog(f"{ts} [TCP 수신 완료] seat_result seat_status={seats}")
