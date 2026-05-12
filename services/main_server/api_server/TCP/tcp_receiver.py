@@ -9,12 +9,14 @@ AI 서버 (192.168.1.121) TCP 결과 수신 → ROS2 PoseStamped 발행
 
 import argparse
 import json
+import logging
 import math
 import os
 import socket
 import struct
 import threading
 import time
+from pathlib import Path
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
@@ -225,6 +227,130 @@ def receive_tcp_messages(sock: socket.socket, bridge: TcpGoalBridge):
 # ══════════════════════════════════════════════════════════════════════
 # 메인
 # ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+# YOLOResultServer — moosinsa_service.py 에서 임포트해 사용
+# AI 서버(tcp_main_ai.py)가 TCP로 접속해 결과를 전송하면 수신하는 서버
+# ══════════════════════════════════════════════════════════════════════
+
+_TCP_BACKLOG_PATH = Path(__file__).parent / "tcp_backlog.log"
+_TCP_BACKLOG_MAX  = 30
+_tcp_backlog_lock = threading.Lock()
+
+def _write_tcp_backlog(line: str):
+    with _tcp_backlog_lock:
+        lines = []
+        if _TCP_BACKLOG_PATH.exists():
+            lines = _TCP_BACKLOG_PATH.read_text(encoding="utf-8").splitlines()
+        lines.append(line)
+        if len(lines) > _TCP_BACKLOG_MAX:
+            lines = lines[-_TCP_BACKLOG_MAX:]
+        _TCP_BACKLOG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+_tcp_log = logging.getLogger("tcp_result")
+
+
+class YOLOResultServer:
+    """
+    AI 서버(tcp_main_ai.py)가 접속해 추론 결과를 전송하면 수신하는 TCP 서버.
+    결과는 tcp_backlog.log 에 기록되고 터미널에는 연결 이벤트만 출력된다.
+    수신 프로토콜: [4B big-endian 길이][JSON bytes]
+    """
+
+    def __init__(self, listen_ip: str, listen_port: int,
+                 robot_bridge=None, on_seat_status=None):
+        self.listen_ip        = listen_ip
+        self.listen_port      = listen_port
+        self.robot_bridge     = robot_bridge
+        self._on_seat_status  = on_seat_status
+        self.latest_result: dict | None       = None
+        self.latest_seat_status: list | None  = None
+        self._lock   = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+        _tcp_log.info("[TCP] YOLO 결과 서버 시작: %s:%d", self.listen_ip, self.listen_port)
+
+    def get_latest(self) -> dict | None:
+        with self._lock:
+            return self.latest_result
+
+    def get_latest_seat_status(self) -> list | None:
+        with self._lock:
+            return self.latest_seat_status
+
+    def _run(self):
+        server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server_sock.bind((self.listen_ip, self.listen_port))
+        except OSError as e:
+            _tcp_log.error("[TCP] bind 실패 %s:%d — %s", self.listen_ip, self.listen_port, e)
+            return
+        server_sock.listen(5)
+        while True:
+            try:
+                conn, addr = server_sock.accept()
+                _tcp_log.info("[TCP] AI 서버 연결: %s", addr)
+                threading.Thread(target=self._handle_conn, args=(conn, addr), daemon=True).start()
+            except Exception as e:
+                _tcp_log.error("[TCP] accept 오류: %s", e)
+
+    def _handle_conn(self, conn: socket.socket, addr):
+        try:
+            raw_len = recv_exact_bytes(conn, 4)
+            if not raw_len:
+                return
+            length   = struct.unpack("!I", raw_len)[0]
+            raw_data = recv_exact_bytes(conn, length)
+            if not raw_data:
+                return
+
+            result   = json.loads(raw_data.decode("utf-8"))
+            msg_type = result.get("type") or ("seat_status" if "seats" in result else None)
+            ts       = time.strftime("%Y-%m-%d %H:%M:%S")
+
+            if msg_type == "seat_status":
+                seats = result.get("seats")
+                with self._lock:
+                    self.latest_seat_status = seats
+                _write_tcp_backlog(f"{ts} [TCP 수신 완료] seat_result seat_status={seats}")
+                if self._on_seat_status is not None:
+                    self._on_seat_status(seats)
+            else:
+                with self._lock:
+                    self.latest_result = result
+                _write_tcp_backlog(
+                    f"{ts} [TCP 수신 완료] "
+                    f"type={result.get('type')} "
+                    f"frame_id={result.get('frame_id')} "
+                    f"goals={len(result.get('goals') or [])} "
+                    f"process_ms={result.get('process_ms')}ms"
+                )
+                if self.robot_bridge is not None:
+                    self.robot_bridge.handle_result(result)
+                self._forward_to_cam_ui(raw_data)
+
+        except Exception as e:
+            _tcp_log.error("[TCP] 처리 오류: %s", e)
+        finally:
+            conn.close()
+
+    def _forward_to_cam_ui(self, raw_data: bytes):
+        cam_ui_ip   = os.getenv("CAM_UI_IP")
+        cam_ui_port = os.getenv("CAM_UI_PORT")
+        if not cam_ui_ip or not cam_ui_port:
+            return
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect((cam_ui_ip, int(cam_ui_port)))
+            s.sendall(struct.pack("!I", len(raw_data)) + raw_data)
+            s.close()
+        except Exception:
+            pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI TCP 결과 → ROS2 PoseStamped 브릿지")
     parser.add_argument("--host",     default=AI_SERVER_IP,   help="AI 서버 IP")
