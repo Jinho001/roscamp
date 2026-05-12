@@ -282,6 +282,7 @@ class PageManager:                                        # ★ CHANGED ★
         )
         self._tryon_arrive_page = TryonArrivePage(            # ★ NEW ★
             on_confirmed = lambda: self._go_tryon_another(),
+            api_client   = self._shoe_api,                     # [수령완료연동]
         )
         self._tryon_another_page = TryonAnotherPage(          # ★ NEW ★
             on_home  = lambda: self._go(self.HOME),
@@ -376,8 +377,11 @@ class PageManager:                                        # ★ CHANGED ★
         ■ 연동: TryonDeliveryPage.notify_arrived() 가 WS /ws/kiosk/amr
           의 KIOSK_AMR_ARRIVE 수신 시 호출되고, 그 안에서 on_arrived()
           콜백이 실행되어 이 메서드로 연결된다.
+        [수령완료연동] 현재 order 에 저장된 배정 robot_id 를 arrive 페이지로 넘겨
+        '수령 완료' 클릭 시 POST /pickup/complete?robot_id=... 가 정확한 로봇에 발행되게 한다.
         """
-        self._tryon_arrive_page.reset()
+        order = getattr(self, "_current_order", {}) or {}
+        self._tryon_arrive_page.reset(robot_id=order.get("robot_id"))
         self._go(self.TRYON_ARRIVE)
 
     def _go_tryon_another(self):                              # ★ NEW ★

@@ -844,12 +844,14 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
                     selection["robot_id"] = resp.get("robot_id", "sshopy2")
                     self._on_request(selection)
 
+                # [dispatcher자동배정] robot_id 미지정(None) → 서버가 idle pinky 중
+                # 배터리 높은 순으로 자동 배정. 응답 resp["robot_id"]가 실제 배정 로봇.
                 self._api.request_tryon(
                     shoe_id=shoe_id,
                     color=self._sel_color,
                     size=self._sel_size,
                     seat_id=int(self._sel_seat),
-                    robot_id="sshopy2",
+                    robot_id=None,
                     callback=_on_tryon,
                 )
 

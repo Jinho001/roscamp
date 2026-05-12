@@ -77,11 +77,14 @@ class TopBar(QFrame):
 
 
 class TryonArrivePage(QWidget):
-    def __init__(self, on_home=None, on_confirmed=None):
+    def __init__(self, on_home=None, on_confirmed=None, api_client=None):
         super().__init__()
 
         self._on_home      = on_home      or (lambda: None)
         self._on_confirmed = on_confirmed or (lambda: None)
+        # [수령완료연동] /pickup/complete 호출용 KioskApiClient + 배정 로봇 ID
+        self._api          = api_client
+        self._robot_id: str = "sshopy2"   # reset(robot_id=...) 에서 갱신
         self._s            = 0.5
         self._confirmed    = False
 
@@ -148,13 +151,17 @@ class TryonArrivePage(QWidget):
         #   돌기 시작해 홈 화면에서 30초 후 tryon_another로 튀는 버그 발생.
         self._update_timer_lbl()
 
-    def reset(self):                                       # ★ NEW ★
+    def reset(self, robot_id: str = None):                 # ★ NEW ★
         """
         PageManager가 delivery → arrive 전환 시 호출.
         카운트다운과 confirmed 상태를 초기화하고 타이머를 다시 시작한다.
+        [수령완료연동] robot_id 인자로 /pickup/complete 호출 대상 갱신.
         """
+        if robot_id:
+            self._robot_id = robot_id
         self._confirmed   = False
         self._remaining_ms = ARRIVE_TIMEOUT_MS
+        self._confirm_btn.setEnabled(True)
         self._update_timer_lbl()
         self._countdown.stop()
         self._countdown.start()
@@ -175,7 +182,22 @@ class TryonArrivePage(QWidget):
             return
         self._confirmed = True
         self._countdown.stop()
-        self._on_confirmed()
+        self._confirm_btn.setEnabled(False)
+
+        # [수령완료연동] POST /pickup/complete?robot_id=... → 좌석 해제 + 회수존 이동 +
+        # 홈 복귀 트리거. 응답 성공/실패와 무관하게 다음 화면으로 전환한다
+        # (네트워크 실패 시 UI가 멈추는 것보다 진행을 우선). 실패는 로그만.
+        if self._api is not None:
+            def _on_done(resp):
+                if resp is None:
+                    print(f"[tryon_arrive] /pickup/complete 통신 실패 (robot={self._robot_id})")
+                elif isinstance(resp, dict) and resp.get("success") is False:
+                    print(f"[tryon_arrive] /pickup/complete 실패: {resp.get('detail')}")
+                self._on_confirmed()
+            self._api.complete_pickup(self._robot_id, callback=_on_done)
+        else:
+            # mock 모드 — API 없이 바로 전환
+            self._on_confirmed()
 
     def _go_home(self):                                   # ★ CHANGED ★
         self._countdown.stop()
