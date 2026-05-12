@@ -34,7 +34,7 @@ Role      : 시스템 중앙 백엔드 서버 (FastAPI).
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import asyncio
 import json
@@ -68,6 +68,9 @@ from db.mysql import (
 
 from dotenv import load_dotenv
 import os
+
+from UDP.udp import CameraUDPRelay
+from TCP.tcp_receiver import YOLOResultServer
 
 load_dotenv()
 
@@ -319,173 +322,9 @@ class MLLMClient:
 
 # ══════════════════════════════════════════════════════════════
 # [4] Moosinsa Service ↔ YOLO(CV) 서버
-#     송신: UDP 청크 분할 전송  (moosinsa_service → tcp_main_ai.py)
-#     수신: TCP [4B 헤더 + JSON] (tcp_main_ai.py → moosinsa_service)
-#     구현 클래스:
-#       YOLOResultServer - YOLO 결과를 수신하는 내부 TCP 서버 (별도 스레드)
-#       YOLOClient       - 이미지를 UDP로 전송하고 결과를 폴링하는 클라이언트
+#     YOLOResultServer → TCP/tcp_receiver.py
+#     YOLOClient       → 이미지를 UDP로 전송하고 결과를 폴링
 # ══════════════════════════════════════════════════════════════
-
-# ── TCP/UDP 스크립트에서 비전 유틸 임포트 ────────────────────
-try:
-    import rclpy
-    _ROS2_AVAILABLE = True
-except ImportError:
-    _ROS2_AVAILABLE = False
-
-from TCP.tcp_receiver import recv_exact_bytes, receive_tcp_message, TcpGoalBridge
-from UDP.udp import (
-    FrameBuffer,
-    send_udp_message,
-    HDR_FMT,
-    HDR_SIZE,
-    MAGIC,
-    PKT_DATA,
-    PKT_HEARTBEAT,
-    UDP_RECV_BUF,
-    UDP_SEND_BUF,
-    UDP_MAX_PACKET,
-)
-
-import collections
-
-class _MaxLinesFileHandler(logging.FileHandler):
-    """최대 max_lines 줄만 파일에 유지하는 핸들러."""
-    def __init__(self, filename, max_lines=30, encoding="utf-8"):
-        super().__init__(filename, mode="a", encoding=encoding)
-        self._max_lines = max_lines
-        self._lines: collections.deque = collections.deque(maxlen=max_lines)
-        try:
-            with open(filename, "r", encoding=encoding) as f:
-                for line in f:
-                    self._lines.append(line.rstrip("\n"))
-        except FileNotFoundError:
-            pass
-
-    def emit(self, record):
-        msg = self.format(record)
-        self._lines.append(msg)
-        try:
-            with open(self.baseFilename, "w", encoding=self.encoding) as f:
-                f.write("\n".join(self._lines) + "\n")
-        except Exception:
-            self.handleError(record)
-
-class YOLOResultServer:
-    """
-    AI 서버(hands_seat_ai.py)의 TCP 서버에 클라이언트로 접속하여 추론 결과를 수신.
-    별도 데몬 스레드에서 동작하며 최신 결과를 latest_result 에 보관한다.
-    연결이 끊기면 자동으로 재연결한다.
-
-    수신 프로토콜: [4bytes big-endian 길이] + [JSON bytes]
-    """
-
-    def __init__(self, listen_ip: str, listen_port: int, robot_bridge=None):
-        self.listen_ip     = listen_ip
-        self.listen_port   = listen_port
-        self.robot_bridge  = robot_bridge
-        self.latest_seat_status: Optional[list] = None
-        self.latest_result: Optional[dict] = None
-        self._lock   = threading.Lock()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-        # TCP/ 디렉터리에 백로그 파일 기록용 로거 (최대 30줄 유지)
-        _log_path = Path(__file__).parent / "TCP" / "tcp_backlog.log"
-        self._backlog_logger = logging.getLogger("tcp_backlog")
-        if not self._backlog_logger.handlers:
-            _fh = _MaxLinesFileHandler(_log_path, max_lines=30)
-            _fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-            self._backlog_logger.addHandler(_fh)
-            self._backlog_logger.setLevel(logging.INFO)
-            self._backlog_logger.propagate = False
-        self._announced = False
-
-    # ── 공개 메서드 ──────────────────────────────────────────
-
-    def start(self):
-        self._thread.start()
-        logger.info(f"YOLOResultServer 시작 → AI 서버 접속 대기: {self.ai_server_ip}:{self.ai_server_port}")
-
-    def get_latest(self) -> Optional[dict]:
-        with self._lock:
-            return self.latest_result
-
-    # ── 내부 메서드 ──────────────────────────────────────────
-
-    def _run(self):
-        import time
-        RECONNECT_SEC = 3.0
-        while True:
-            sock = None
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5.0)
-                sock.connect((self.ai_server_ip, self.ai_server_port))
-                sock.settimeout(30.0)
-                logger.info(f"[TCP] AI 서버 연결됨: {self.ai_server_ip}:{self.ai_server_port}")
-                self._handle_conn(sock)
-            except (OSError, ConnectionError) as e:
-                logger.warning(f"[TCP] {e} — {RECONNECT_SEC}s 후 재연결")
-            except Exception as e:
-                logger.error(f"[TCP] 예외: {e}")
-            finally:
-                if sock:
-                    try:
-                        sock.close()
-                    except Exception:
-                        pass
-            time.sleep(RECONNECT_SEC)
-
-    def _handle_conn(self, conn: socket.socket):
-        while True:
-            result, length = receive_tcp_message(conn)
-            raw_data = json.dumps(result, ensure_ascii=False).encode("utf-8")
-            msg_type = result.get("type")
-
-            if msg_type == "seat_result":
-                seat_status = result.get("seat_status")
-                with self._lock:
-                    self.latest_seat_status = seat_status
-
-                msg = f"[TCP 수신 완료] seat_result seat_status={seat_status}"
-                if not self._announced:
-                    logger.info(msg)
-                    self._announced = True
-                self._backlog_logger.info(msg)
-
-                if _main_loop is not None:
-                    asyncio.run_coroutine_threadsafe(
-                        broadcast_seat_status(seat_status),
-                        _main_loop
-                    )
-            else:
-                with self._lock:
-                    self.latest_result = result
-                logger.info(
-                    f"[YOLO 결과 수신] from={addr} "
-                    f"type={result.get('type')} "
-                    f"frame_id={result.get('frame_id')} "
-                    f"goals={len(result.get('goals') or [])} "
-                    f"process_ms={result.get('process_ms')}ms"
-                )
-                if self.robot_bridge is not None:
-                    self.robot_bridge.handle_result(result)
-                self._forward_to_cam_ui(raw_data)
-
-    def _forward_to_cam_ui(self, raw_data: bytes):
-        try:
-            fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            fwd_sock.connect((os.getenv("CAM_UI_IP"), int(os.getenv("CAM_UI_PORT"))))
-            fwd_sock.sendall(struct.pack("!I", len(raw_data)) + raw_data)
-            fwd_sock.close()
-        except Exception as e:
-            logger.warning(f"PySide6 관제 UI 포워딩 실패 (무시): {e}")
-
-    @staticmethod
-    def _recv_exact(conn: socket.socket, n: int) -> Optional[bytes]:
-        return recv_exact_bytes(conn, n)
-    
-
 
 class YOLOClient:
     """
@@ -626,86 +465,7 @@ class VisionRobotBridge:
 
 # ══════════════════════════════════════════════════════════════
 # [5] Moosinsa Service ↔ Top View Camera(TVC) 서버
-#
-#
-#
-# ══════════════════════════════════════════════════════════════
-
-class CameraUDPServer:
-    def __init__(
-        self,
-        listen_ip="192.168.1.120",
-        listen_port=7007,
-        forward_ip="192.168.1.121",
-        forward_port=6006,
-    ):
-        self.listen_ip = listen_ip
-        self.listen_port = listen_port
-        self.forward_ip = forward_ip
-        self.forward_port = forward_port
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def start(self):
-        self._thread.start()
-        logger.info(
-            f"CameraUDPServer 시작: {self.listen_ip}:{self.listen_port} "
-            f"-> AI UDP {self.forward_ip}:{self.forward_port}"
-        )
-
-    # 송신측(picam.py) 헤더 포맷: !IHH = frame_id(4B) + chunk_idx(2B) + total(2B)
-    _CAM_HDR_FMT  = '!IHH'
-    _CAM_HDR_SIZE = struct.calcsize('!IHH')  # 8 bytes
-
-    # ── 수신 스레드: 청크 재조립 → 백로그 큐에 적재 ──────────────
-    def _run(self):
-        recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, UDP_RECV_BUF)
-        recv_sock.bind((self.listen_ip, self.listen_port))
-
-        frame_buf = FrameBuffer()
-
-        while True:
-            try:
-                data, addr = recv_sock.recvfrom(UDP_MAX_PACKET)
-
-                if len(data) < self._CAM_HDR_SIZE:
-                    continue
-
-                frame_id, chunk_idx, total = struct.unpack(
-                    self._CAM_HDR_FMT, data[:self._CAM_HDR_SIZE]
-                )
-
-                if total == 0 or chunk_idx >= total:
-                    continue
-
-                result = frame_buf.add_chunk(frame_id, chunk_idx, total, data[self._CAM_HDR_SIZE:])
-                if result is None:
-                    continue
-
-            except Exception as e:
-                logger.error(f"CameraUDPServer recv error: {e}")
-
-    def _forward_to_ai_server(self, raw_data: bytes):
-        try:
-            fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            fwd_sock.sendto(raw_data, (self.forward_ip, self.forward_port))
-            fwd_sock.close()
-            logger.info(
-                f"[UDP FORWARD] AI server={self.forward_ip}:{self.forward_port}, "
-                f"bytes={len(raw_data)}"
-            )
-        except Exception as e:
-            logger.warning(f"AI server UDP forward 실패: {e}")
-
-    def _forward_to_cam_ui(self, raw_data: bytes):
-        try:
-            fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            fwd_sock.connect((os.getenv("CAM_UI_IP"), int(os.getenv("CAM_UI_PORT"))))
-            fwd_sock.sendall(struct.pack("!I", len(raw_data)) + raw_data)
-            fwd_sock.close()
-        except Exception as e:
-            logger.warning(f"Camera UI forward 실패: {e}")
+#     CameraUDPRelay → UDP/udp.py
 
 
 # ══════════════════════════════════════════════════════════════
@@ -915,30 +675,28 @@ async def lifespan(app: FastAPI):
     vision_robot_bridge = VisionRobotBridge(
         robot_id=os.getenv("PINKYPRO_ROBOT_ID", "sshopy2")
     )
+    def _on_seat_status(seats):
+        if _main_loop is not None:
+            asyncio.run_coroutine_threadsafe(broadcast_seat_status(seats), _main_loop)
+
     yolo_result_server = YOLOResultServer(
         listen_ip=os.getenv('YOLO_RESULT_LISTEN_IP'),
-        listen_port= int(os.getenv('YOLO_RESULT_LISTEN_PORT')),
+        listen_port=int(os.getenv('YOLO_RESULT_LISTEN_PORT')),
         robot_bridge=vision_robot_bridge,
+        on_seat_status=_on_seat_status,
     )
     yolo_result_server.start()
     _yolo_result_server = yolo_result_server
 
     # YOLO 클라이언트 초기화
     yolo_client = YOLOClient(
-        server_ip = os.getenv("YOLO_SERVER_IP"),
-        server_port= int(os.getenv("YOLO_SERVER_PORT")),
+        server_ip=os.getenv("YOLO_SERVER_IP"),
+        server_port=int(os.getenv("YOLO_SERVER_PORT")),
         result_server=yolo_result_server,
     )
 
-    # Top View Camera 데이터 수신 서버
-    # .env 키: CAMERA_LISTEN_IP / CAMERA_LISTEN_PORT  # ★ CHANGED ★
-    camera_udp_server = CameraUDPServer(
-        listen_ip= os.getenv('CAM_LISTEN_IP'),
-        listen_port= int(os.getenv('CAM_LISTEN_PORT')),
-        forward_ip=os.getenv("YOLO_SERVER_IP", "192.168.1.121"),
-        forward_port=int(os.getenv("YOLO_SERVER_PORT", "6006")),
-    )
-    camera_udp_server.start()
+    # Top View Camera UDP 중계 (UDP/udp.py)
+    CameraUDPRelay().start()
 
     # ScenarioOrchestrator 조립
     _orchestrator = ScenarioOrchestrator(

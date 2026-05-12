@@ -22,6 +22,7 @@ import math
 import threading
 import logging
 import os
+from pathlib import Path
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -110,6 +111,32 @@ _stats = {
     "last_camera_hb" : 0.0,
 }
 _stats_lock = threading.Lock()
+
+# ── 백로그 파일 (터미널 대신 파일에 프레임 단위 기록) ───────────────────
+_BACKLOG_PATH = Path(__file__).parent / "udp_backlog.log"
+_BACKLOG_MAX  = 30
+_backlog_lock = threading.Lock()
+
+def _write_backlog(line: str):
+    with _backlog_lock:
+        lines = []
+        if _BACKLOG_PATH.exists():
+            lines = _BACKLOG_PATH.read_text(encoding="utf-8").splitlines()
+        lines.append(line)
+        if len(lines) > _BACKLOG_MAX:
+            lines = lines[-_BACKLOG_MAX:]
+        _BACKLOG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+_status_lock = threading.Lock()
+
+def _print_udp_status(frame_id: int, robot_id, jpeg_size: int):
+    """터미널 한 줄을 \r로 덮어써 최신 송수신 상태만 표시한다."""
+    with _status_lock:
+        print(
+            f"\r[UDP] 송수신 완료  frame={frame_id}  robot={robot_id}"
+            f"  {jpeg_size:,}B → {AI_SERVER_IP}:{AI_UDP_PORT}   ",
+            end="", flush=True
+        )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 청크 재조립 버퍼
@@ -213,9 +240,6 @@ def camera_udp_server():
 
     frame_buf = FrameBuffer()
 
-    log.info("UDP 수신 port=%d  →  AI 중계 %s:%d",
-             CAMERA_UDP_PORT, AI_SERVER_IP, AI_UDP_PORT)
-
     while True:
         try:
             data, addr = recv_sock.recvfrom(UDP_MAX_PACKET)
@@ -257,7 +281,7 @@ def camera_udp_server():
                     with _stats_lock:
                         _stats["heartbeat"]     += 1
                         _stats["last_camera_hb"] = time.time()
-                    log.info("HB  robot=%s frame=%s from=%s",
+                    log.debug("HB  robot=%s frame=%s from=%s",
                              hb.get("robot_id"), hb.get("frame_id"), addr)
                 except Exception:
                     pass
@@ -272,9 +296,12 @@ def camera_udp_server():
             with _stats_lock:
                 _stats["frame_complete"] += 1
 
-            log.info("FRAME robot=%s frame=%d %dB  w=%s h=%s q=%s",
-                     meta.get("robot_id"), frame_id, len(jpeg),
-                     meta.get("width"), meta.get("height"), meta.get("quality"))
+            _write_backlog(
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')} [UDP 송수신 완료] "
+                f"frame={frame_id} robot={meta.get('robot_id')} "
+                f"size={len(jpeg)}B → {AI_SERVER_IP}:{AI_UDP_PORT}"
+            )
+            _print_udp_status(frame_id, meta.get("robot_id"), len(jpeg))
 
             try:
                 send_udp_message(fwd_sock, frame_id, meta, jpeg)
@@ -323,6 +350,20 @@ def stats_thread():
 # ─────────────────────────────────────────────────────────────────────────────
 # 메인
 # ─────────────────────────────────────────────────────────────────────────────
+class CameraUDPRelay:
+    """moosinsa_service.py 에서 임포트해 사용하는 UDP 중계 클래스."""
+
+    def __init__(self):
+        self._udp_thread      = threading.Thread(target=camera_udp_server, daemon=True)
+        self._watchdog_thread = threading.Thread(target=watchdog_thread,   daemon=True)
+
+    def start(self):
+        self._watchdog_thread.start()
+        self._udp_thread.start()
+        log.info("[UDP] 카메라 수신 시작: %s:%d → AI %s:%d",
+                 CAMERA_LISTEN_IP, CAMERA_UDP_PORT, AI_SERVER_IP, AI_UDP_PORT)
+
+
 def main():
     log.info("=" * 60)
     log.info("[MAIN SERVER] 시작")
