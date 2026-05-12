@@ -164,7 +164,7 @@ class KioskApiClient:
         color: str,
         size: str,
         seat_id: int,
-        robot_id: str,
+        robot_id: Optional[str],   # [dispatcher자동배정] None 이면 서버가 idle pinky 자동 선택
         callback: Callable[[Optional[dict]], None],
     ):
         """
@@ -197,6 +197,22 @@ class KioskApiClient:
             None — 통신 실패
         """
         self._run(self._req_tryon_progress, args=(robot_id,), callback=callback)
+
+    def complete_pickup(
+        self,
+        robot_id: str,
+        callback: Callable[[Optional[dict]], None],
+    ):
+        """
+        [수령완료연동] 수령 완료 통지 (좌석 해제 + 회수존 이동 + 홈 복귀 트리거).
+        POST /pickup/complete?robot_id=...
+
+        callback 인자:
+            dict — 서버 응답 (성공)
+            dict — {"success": False, "detail": str} (HTTP 에러)
+            None — 통신 실패
+        """
+        self._run(self._req_pickup_complete, args=(robot_id,), callback=callback)
 
     def fetch_seat_status(self, callback: Callable[[Optional[dict]], None]):
         """
@@ -314,7 +330,7 @@ class KioskApiClient:
         return self._post_json(url, {"shoe_id": shoe_id, "color": color, "size": size})
 
     def _req_tryon_request(
-        self, shoe_id: str, color: str, size: str, seat_id: int, robot_id: str
+        self, shoe_id: str, color: str, size: str, seat_id: int, robot_id: Optional[str]
     ) -> Optional[dict]:
         """[시착요청연동] POST /tryon/request → success dict 또는 {"success": False, "detail": str} on 409"""
         import urllib.error
@@ -340,6 +356,22 @@ class KioskApiClient:
         """[시착요청연동] POST /kiosk/tryon/progress → {robot_id, stage, progress_pct, arrived, seat_id}"""
         url = f"{BASE_URL}/kiosk/tryon/progress"
         return self._post_json(url, {"robot_id": robot_id})
+
+    def _req_pickup_complete(self, robot_id: str) -> Optional[dict]:
+        """[수령완료연동] POST /pickup/complete?robot_id=... (query param, body 없음)"""
+        import urllib.parse
+        url = f"{BASE_URL}/pickup/complete?robot_id={urllib.parse.quote(robot_id)}"
+        try:
+            req = urllib.request.Request(url, method="POST")
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                err = json.loads(e.read().decode("utf-8"))
+                detail = err.get("detail", "수령 완료 처리에 실패했습니다.")
+            except Exception:
+                detail = "수령 완료 처리에 실패했습니다."
+            return {"success": False, "detail": detail}
 
 
 # ════════════════════════════════════════════════════════════
