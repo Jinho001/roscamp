@@ -233,14 +233,20 @@ def hsv_histogram(crop_bgr, bins=32):
 
 
 def combined_score(fa, fb, ha, hb):
-    return (float(np.dot(fa, fb)) +
-            float(cv2.compareHist(ha, hb, cv2.HISTCMP_CORREL))) / 2.0
+    hist_score = float(cv2.compareHist(ha, hb, cv2.HISTCMP_CORREL))
+    if fa is None or fb is None:
+        return hist_score
+    # return (float(np.dot(fa, fb)) + hist_score) / 2.0
+    return hist_score
 
 
 def update_ref(ref_feat, ref_hist, new_feat, new_hist, alpha=0.05):
-    f = (1 - alpha) * ref_feat + alpha * new_feat
     h = (1 - alpha) * ref_hist + alpha * new_hist
-    return f / (np.linalg.norm(f) + 1e-6), h
+    if ref_feat is None or new_feat is None:
+        return None, h
+    # f = (1 - alpha) * ref_feat + alpha * new_feat
+    # return f / (np.linalg.norm(f) + 1e-6), h
+    return None, h
 
 
 def iou(a, b):
@@ -254,11 +260,21 @@ def iou(a, b):
     return inter / ((ax2-ax1)*(ay2-ay1) + (bx2-bx1)*(by2-by1) - inter)
 
 
-def nms_dets(dets, iou_thresh=0.3):
+def nms_dets(dets, iou_thresh=0.3, rois=None):
     dets = sorted(dets, key=lambda d: d[4], reverse=True)
     kept = []
     for d in dets:
-        if not any(iou(d[1], k[1]) > iou_thresh for k in kept):
+        suppress = False
+        for k in kept:
+            if iou(d[1], k[1]) > iou_thresh:
+                if rois:
+                    d_roi = next((i for i, r in enumerate(rois) if is_inside_roi(d[1], r)), -1)
+                    k_roi = next((i for i, r in enumerate(rois) if is_inside_roi(k[1], r)), -1)
+                    if d_roi >= 0 and k_roi >= 0 and d_roi != k_roi:
+                        continue  # 서로 다른 ROI → suppress 하지 않음
+                suppress = True
+                break
+        if not suppress:
             kept.append(d)
     return kept
 
@@ -414,9 +430,10 @@ class HandsSeatAI:
         print("  figure  :", list(self.figure_model.names.values()))
 
         # ReID
-        device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.reid = ReIDExtractor(device)
-        print(f"  Device  : {device}")
+        # device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.reid = ReIDExtractor(device)
+        # print(f"  Device  : {device}")
+        self.reid = None
 
         # UDP
         self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -448,6 +465,7 @@ class HandsSeatAI:
         self._track_state      = SEARCHING
         self._target_id        = None
         self._target_ids       = []
+        self._confirmed_fig_ids = set()
         self._target_enabled   = True
         self._auto_tracking    = True
         self._lost_count       = 0
@@ -474,8 +492,17 @@ class HandsSeatAI:
 
         self._running = True
 
+        # 좌석 점유 분류기 (학습 후 활성화)
+        cls_path = Path(__file__).parent / "robot_model" / "occupancy_cls" / "weights" / "best.pt"
+        self._occ_cls = YOLO(str(cls_path)) if cls_path.exists() else None
+        if self._occ_cls:
+            print("[INFO] 좌석 점유 분류기 로드됨")
+        else:
+            print("[INFO] 좌석 점유 분류기 없음 → figure_model 사용")
+
         self.WIN = "Hands & Seat AI"
         self.viewer = MultiRobotViewer(self.WIN, main_robot_no=6)
+        cv2.setMouseCallback(self.WIN, on_mouse)
 
         print("[INFO] 시작  [1~4] 좌석선택  [7] 타겟표시 ON/OFF  [A] 자동추적 ON/OFF  [R] 타겟초기화  [Z] 좌석삭제  [+/-] ROI크기  [5/6/8] 모드  [Q] 종료")
 
@@ -779,10 +806,10 @@ class HandsSeatAI:
                 }
                 goals.append(goal)
                 self._last_pub_t = now
-                cv2.circle(annotated, (cx, cy), 12, color, 3)
+                cv2.circle(annotated, (cx, cy), 12, (255, 100, 0), 3)
                 cv2.putText(annotated, f"GOAL ({mx:.2f},{my:.2f})",
                             (cx + 14, cy - 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 100, 0), 2)
                 print(f"[GOAL] pixel=({cx},{cy}) map=({mx:.3f},{my:.3f})")
 
         remain     = max(0.0, COOLDOWN_SEC - (time.time() - self._last_pub_t))
@@ -803,7 +830,7 @@ class HandsSeatAI:
             base = frame
 
         fig_results = self.figure_model.track(
-            base, persist=True, conf=0.5, verbose=False)
+            base, persist=True, conf=0.3, verbose=False)
         fig_dets = []
 
         if (fig_results[0].boxes is not None
@@ -815,12 +842,14 @@ class HandsSeatAI:
                 x1, y1, x2, y2 = map(int, box)
                 conf = float(boxes.conf[i])
                 crop = base[max(0, y1):y2, max(0, x1):x2]
-                feat = self.reid.extract(crop)
+                # feat = self.reid.extract(crop)
+                feat = None
                 hist = hsv_histogram(crop)
-                if feat is not None and hist is not None:
+                if hist is not None:
                     fig_dets.append((int(tid), (x1,y1,x2,y2), feat, hist, conf))
 
-        fig_dets = nms_dets(fig_dets)
+        fig_dets = nms_dets(fig_dets, rois=seat_rois)
+        all_fig_dets = fig_dets[:]  # 좌석 점유/타겟 표시용 (stable 제한 전)
 
         now = time.time()
         raw_count = len(fig_dets)
@@ -843,14 +872,37 @@ class HandsSeatAI:
             fig_dets = ([target_det] if target_det else []) + others[:extra_slots]
         else:
             fig_dets = ([target_det] if target_det else []) + others
-        self._target_ids = [d[0] for d in fig_dets] if self._target_enabled else []
 
-        occupy_boxes = [d[1] for d in fig_dets]
-        seat_status = [(roi, any(is_inside_roi(fb, roi) for fb in occupy_boxes))
-                       for roi in seat_rois]
+        # 새 figure 등장 시 타겟으로 추가 (고정)
+        if self._target_enabled:
+            for det in all_fig_dets:
+                if det[0] not in self._confirmed_fig_ids:
+                    self._confirmed_fig_ids.add(det[0])
+                    print(f"[INFO] 새 피규어 #{det[0]} 감지 → 타겟 추가")
+        self._target_ids = [d[0] for d in all_fig_dets
+                            if d[0] in self._confirmed_fig_ids] if self._target_enabled else []
+
+        if self._occ_cls and seat_rois:
+            seat_status = []
+            for roi in seat_rois:
+                x1, y1, x2, y2 = roi
+                crop = base[max(0,y1):y2, max(0,x1):x2]
+                if crop.size == 0:
+                    seat_status.append((roi, False))
+                    continue
+                res = self._occ_cls.predict(crop, verbose=False, imgsz=64)
+                names = res[0].names
+                probs = res[0].probs.data.tolist()
+                occ_idx = next(i for i, n in names.items() if n == "occupied")
+                occupied = probs[occ_idx] > 0.5
+                seat_status.append((roi, occupied))
+        else:
+            occupy_boxes = [d[1] for d in all_fig_dets]
+            seat_status = [(roi, any(is_inside_roi(fb, roi) for fb in occupy_boxes))
+                           for roi in seat_rois]
 
         found = False
-        if self._target_enabled and self._auto_tracking and self._ref_feat is None and fig_dets:
+        if self._target_enabled and self._auto_tracking and self._ref_hist is None and fig_dets:
             det = max(fig_dets, key=lambda d: (d[1][2]-d[1][0])*(d[1][3]-d[1][1]))
             self._target_id = det[0]
             self._ref_feat = det[2]
@@ -859,7 +911,7 @@ class HandsSeatAI:
             self._lost_count = 0
             found = True
 
-        if self._target_enabled and self._auto_tracking and self._ref_feat is not None and fig_dets:
+        if self._target_enabled and self._auto_tracking and self._ref_hist is not None and fig_dets:
             direct = next((d for d in fig_dets if d[0] == self._target_id), None)
             if direct:
                 found = True
@@ -912,7 +964,7 @@ class HandsSeatAI:
                               COLOR_YELLOW, 2)
 
         if self._target_enabled:
-            for target_idx, det in enumerate(fig_dets, start=1):
+            for target_idx, det in enumerate(all_fig_dets, start=1):
                 tid, (x1,y1,x2,y2), _, _, _ = det
                 color     = COLOR_TARGET
                 overlay   = annotated.copy()
@@ -978,6 +1030,10 @@ class HandsSeatAI:
                 self._ref_hist = None
             print(f"[TRACK] 자동추적 {'ON' if self._auto_tracking else 'OFF'}")
 
+        elif key in (ord('c'), ord('v')):
+            label = "empty" if key == ord('c') else "occupied"
+            self._save_roi_crops(label)
+
         elif key == ord('g'):
             if selected_roi >= 0 and selected_roi < len(seat_rois):
                 if selected_roi in locked_rois:
@@ -990,12 +1046,13 @@ class HandsSeatAI:
                 print("[WARN] 먼저 1~4 키로 좌석을 선택하세요")
 
         elif key == ord('r'):
-            self._ref_feat    = None
-            self._ref_hist    = None
-            self._track_state = SEARCHING
-            self._target_id   = None
-            self._target_ids  = []
-            self._lost_count  = 0
+            self._ref_feat          = None
+            self._ref_hist          = None
+            self._track_state       = SEARCHING
+            self._target_id         = None
+            self._target_ids        = []
+            self._confirmed_fig_ids = set()
+            self._lost_count        = 0
             print("[INFO] 타겟 초기화")
         elif key == ord('z') and seat_rois:
             removed = seat_rois.pop()
@@ -1037,6 +1094,26 @@ class HandsSeatAI:
         elif key == ord('8'):
             self._ai_mode = MODE_ALL
             print("[MODE] 8 — 전체 기능")
+
+    def _save_roi_crops(self, label: str):
+        if not seat_rois:
+            print("[WARN] 저장된 좌석 ROI 없음")
+            return
+        frame_q = list(self._frame_queue.queue)
+        if not frame_q:
+            print("[WARN] 현재 프레임 없음")
+            return
+        frame, _ = frame_q[-1]
+        save_dir = Path(__file__).parent / "roi_dataset" / label
+        save_dir.mkdir(parents=True, exist_ok=True)
+        ts = int(time.time() * 1000)
+        for i, (x1, y1, x2, y2) in enumerate(seat_rois):
+            crop = frame[max(0,y1):y2, max(0,x1):x2]
+            if crop.size == 0:
+                continue
+            path = save_dir / f"seat{i+1}_{ts}.jpg"
+            cv2.imwrite(str(path), crop)
+        print(f"[DATA] {label} 이미지 {len(seat_rois)}장 저장 → roi_dataset/{label}/")
 
     def close(self):
         self.udp_sock.close()
