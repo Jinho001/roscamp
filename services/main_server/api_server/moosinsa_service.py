@@ -38,6 +38,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import asyncio
 import json
+import re
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import logging
 import struct
 import socket
@@ -205,6 +208,122 @@ TAG_SCHEMA_KEYS = [
     "activity", "style", "feature", "colors",
     "brand", "season_weather", "price", "target",
 ]
+
+TAG_SCHEMA = {
+    "activity": ["러닝", "웨이트", "등산", "축구", "농구", "데이트", "출근", "일상", "격식", "캠핑", "물놀이"], "style": ["힙한", "무난한", "깔끔한", "화려한", "빈티지", "클래식", "귀여운", "레트로", "테크웨어", "고프코어", "스포티", "발레코어"], "feature": ["쿠션감", "발볼 넓음", "방수", "키높이", "가벼움", "통기성", "미끄럼 방지", "편안함", "내구성", "보온성"], "colors": ["화이트", "블랙", "그레이", "레드", "오렌지", "옐로우", "그린", "블루", "퍼플", "브라운", "베이지", "실버", "네이비", "핑크"], "brand": ["나이키", "아디다스", "뉴발란스", "반스", "컨버스", "아식스", "살로몬", "오니츠카타이거", "푸마", "미즈노", "킨", "호카", "닥터마틴", "어그", "리복"], "season_weather": ["봄/가을용", "여름용", "겨울용", "사계절용", "우천용"], "price": ["가성비", "일반", "프리미엄"], "target": ["남성용", "여성용", "공용"]
+}
+
+SYNONYMS = {
+    "activity": {
+        "데일리": "일상", "평소": "일상", "회사": "출근", "출근룩": "출근", "조깅": "러닝", "러닝화": "러닝", "헬스": "웨이트", "운동": "웨이트", "소개팅": "데이트", "면접": "격식", "결혼식": "격식", "풋살": "축구", "농구화": "농구", "농구": "농구",
+    },
+    "style": {
+        "심플한": "깔끔한", "베이직한": "무난한", "튀는": "화려한", "아웃도어": "고프코어",
+    },
+    "feature": {
+        "푹신한": "쿠션감", "발편한": "편안함", "발 편한": "편안함", "편하고": "편안함", "넓은발볼": "발볼 넓음", "발볼큰": "발볼 넓음", "비올때": "방수", "안미끄러운": "미끄럼 방지", "가벼운": "가벼움", "따뜻한": "보온성", "털신": "보온성"
+    },
+    "colors": {
+        "빨강": "레드", "빨간색": "레드", "빨간": "레드", "붉은색": "레드", "레드": "레드", "버건디": "레드",
+        "주황": "오렌지", "주황색": "오렌지", "오렌지색": "오렌지", "오렌지": "오렌지",
+        "노랑": "옐로우", "노란색": "옐로우", "노란": "옐로우", "황색": "옐로우", "옐로우": "옐로우", "머스타드": "옐로우",
+        "초록": "그린", "초록색": "그린", "녹색": "그린", "그린": "그린", "카키": "그린", "올리브": "그린", "올리브그린": "그린",
+        "파랑": "블루", "파란색": "블루", "파란": "블루", "하늘색": "블루", "블루": "블루",
+        "남색": "네이비", "네이비": "네이비", "곤색": "네이비",
+        "보라": "퍼플", "보라색": "퍼플", "퍼플": "퍼플",
+        "핑크": "핑크", "분홍": "핑크", "분홍색": "핑크", "핫핑크": "핑크",
+        "하얀색": "화이트", "흰색": "화이트", "하얀": "화이트", "올화이트": "화이트", "화이트": "화이트", "프화이트": "화이트",
+        "검정": "블랙", "검정색": "블랙", "검은색": "블랙", "검은": "블랙", "올블랙": "블랙", "블랙": "블랙",
+        "회색": "그레이", "그레이": "그레이", "잿빛": "그레이",
+        "갈색": "브라운", "브라운": "브라운", "밤색": "브라운", "고동색": "브라운",
+        "베이지": "베이지", "살구색": "베이지", "아이보리": "베이지", "크림": "베이지", "크림색": "베이지",
+        "은색": "실버", "실버": "실버", "메탈릭": "실버"
+    },
+    "price": {
+        "저렴한": "가성비", "싼": "가성비", "고가": "프리미엄", "비싼": "프리미엄"
+    }
+}
+
+KOR_TO_ENG_COLOR = {
+    "화이트": "white", "블랙": "black", "그레이": "gray", "레드": "red", "오렌지": "orange", "옐로우": "yellow", "그린": "green", "블루": "blue", "퍼플": "purple", "브라운": "brown", "베이지": "beige", "실버": "silver", "네이비": "navy", "핑크": "pink",
+}
+
+_tokenizer = None
+_llm_model = None
+
+def load_llm_model():
+    global _tokenizer, _llm_model
+    print("⏳ LLM 모델 로딩 중...")
+    quant_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4"
+    )
+    _tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-3B-Instruct")
+    _llm_model = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen2.5-3B-Instruct",
+        device_map="auto",
+        quantization_config=quant_config
+    )
+    print("✅ LLM 모델 로딩 완료")
+
+def extract_tags(user_text: str):
+    system_prompt = (
+        f"신발 정보 추출기. 직접 언급된 정보만 JSON으로 추출. "
+        f"추측 금지. 스키마: {json.dumps(TAG_SCHEMA, ensure_ascii=False)}"
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_text}
+    ]
+    text = _tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = _tokenizer(text, return_tensors="pt").to(_llm_model.device)
+    with torch.no_grad():
+        outputs = _llm_model.generate(**inputs, max_new_tokens=150, do_sample=False)
+    generated = _tokenizer.decode(
+        outputs[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+    ).strip()
+    match = re.search(r"\{[\s\S]*\}", generated)
+    parsed = {}
+    if match:
+        try:
+            parsed = json.loads(match.group())
+        except Exception:
+            parsed = {}
+    final_parsed = {k: [] for k in TAG_SCHEMA.keys()}
+    for k, allowed_values in TAG_SCHEMA.items():
+        vals = parsed.get(k, [])
+        if vals is None:
+            vals = []
+        if isinstance(vals, str):
+            vals = [vals]
+        for v in vals:
+            if v in allowed_values:
+                final_parsed[k].append(v)
+    normalized_text = user_text.replace(" ", "")
+    for field, mapping in SYNONYMS.items():
+        for raw_word, normalized_word in mapping.items():
+            if raw_word in normalized_text and normalized_word not in final_parsed[field]:
+                final_parsed[field].append(normalized_word)
+    return final_parsed
+
+def convert_color_tags_to_english(tags: dict) -> dict:
+    converted = {k: list(v) for k, v in tags.items()}
+    eng_colors = []
+    for color in converted.get("colors", []):
+        eng_colors.append(KOR_TO_ENG_COLOR.get(color, color.lower()))
+    converted["colors"] = eng_colors
+    return converted
+
+def merge_tags(accumulated_tags: dict, new_tags: dict) -> dict:
+    merged = {k: list(v) for k, v in accumulated_tags.items()}
+    for key, values in new_tags.items():
+        if key not in merged:
+            merged[key] = []
+        for value in values:
+            if value not in merged[key]:
+                merged[key].append(value)
+    return merged
 
 
 class MLLMClient:
@@ -582,14 +701,15 @@ class ScenarioOrchestrator:
             logger.warning(f"[STEP2] YOLO 통신 오류 (검색 계속 진행): {e}")
 
         # ── STEP 3: M_LLM 상품 필터링 ───────────────────────
-        logger.info(
-            f"[STEP3] M_LLM 요청 - user_text='{req.keyword}' "
-            f"accumulated_tags={req.accumulated_tags}"
-        )
+        new_tags = extract_tags(req.keyword)
+        new_tags = convert_color_tags_to_english(new_tags)
+        merged_tags = merge_tags(req.accumulated_tags, new_tags)
+        logger.info(f"[STEP3] 추출된 태그: {new_tags}, 누적 태그: {merged_tags}")
+
         try:
             result = await self.llm.request_filtering(
                 user_text=req.keyword,
-                accumulated_tags=req.accumulated_tags,
+                accumulated_tags=merged_tags,
             )
             
             if result is None:
@@ -671,6 +791,11 @@ async def lifespan(app: FastAPI):
         # logger.warning(f"M_LLM 응답 없음 ({MLLM_HOST}:{MLLM_PORT}) - 요청 시 재시도")
         logger.warning("Moosinsa Service 시작 완료 - M_LLM 연결 불가")
 
+    # loop 먼저 선언하고 모델 로드
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, load_llm_model)
+    logger.info("LLM 태그 추출 모델 로드 완료")
+
     # YOLO 결과 수신 서버 시작 (별도 데몬 스레드)
     vision_robot_bridge = VisionRobotBridge(
         robot_id=os.getenv("PINKYPRO_ROBOT_ID", "sshopy2")
@@ -727,7 +852,7 @@ async def lifespan(app: FastAPI):
     #   fleet.on_retrieval_complete    = _on_retrieval_complete      # Scene 4 완료
     #   fleet.get_warehouse_pos        = _db_get_warehouse_pos       # TC 4-12 DB 위치 조회
     #   (fleet이 product_id로 창고 위치를 조회할 때 이 콜백을 동기 호출한다)
-    loop = asyncio.get_event_loop()
+
     await loop.run_in_executor(None, fleet.connect_all)
     fleet.start_reconnect_loop()
     logger.info("Robot fleet 초기화 완료")
