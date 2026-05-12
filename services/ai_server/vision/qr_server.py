@@ -11,10 +11,14 @@ qr_yo.py 대비 개선사항:
   - 후보 우선순위 재정렬: 경량 후보 먼저 (gray → adaptive → otsu → clahe → sharp → bgr)
   - CLAHE 객체 재사용 (매 프레임 생성 제거)
   - ROI CLI 인자 및 /config 엔드포인트로 런타임 변경 가능
+  - 웹훅: QR 인식 성공 시 moosinsa_service로 POST (--webhook-url 지정 시 활성)
 
 실행:
   python3 qr_server.py --udp-port 5010 --port 8083
   python3 qr_server.py --udp-port 5010 --port 8083 --roi 0.10 0.50 0.90 1.00
+  python3 qr_server.py --udp-port 5010 --port 8083 \
+      --webhook-url http://moosinsa-service:8005/qr_product_info \
+      --robot-id front_jet
 """
 
 import argparse
@@ -26,6 +30,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+import requests
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -33,6 +38,8 @@ from pydantic import BaseModel
 
 # ── 전역 파라미터 ──────────────────────────────────────────────────────────────
 ROI_RATIOS = [0.20, 0.55, 0.80, 1.00]   # [x1, y1, x2, y2] 비율
+WEBHOOK_URL: str = ""                    # --webhook-url 로 설정; 비어있으면 비활성
+ROBOT_ID: str = "unknown"               # --robot-id 로 설정
 # ─────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="QR Detect Server")
@@ -53,6 +60,9 @@ _detector.setEpsY(0.3)
 
 _latest_frame: Optional[tuple] = None   # (frame, result)
 _frame_lock = threading.Lock()
+
+# 중복 웹훅 전송 방지: 마지막으로 전송한 QR raw 값 보관
+_last_sent_raw: str = ""
 
 
 # ── API 모델 ──────────────────────────────────────────────────────────────────
@@ -150,8 +160,23 @@ def _draw_overlay(frame: np.ndarray, result: dict) -> np.ndarray:
     return display
 
 
+# ── 웹훅 ──────────────────────────────────────────────────────────────────────
+def _send_webhook(raw: str, mode: str) -> None:
+    """QR 인식 결과를 moosinsa_service로 POST. 실패 시 로그만 남기고 종료."""
+    payload = {
+        "robot_id":    ROBOT_ID,
+        "product_id":  raw,
+        "raw_payload": raw,
+    }
+    try:
+        resp = requests.post(WEBHOOK_URL, json=payload, timeout=3)
+        print(f"[WEBHOOK] POST {WEBHOOK_URL} → {resp.status_code}")
+    except requests.exceptions.RequestException as e:
+        print(f"[WEBHOOK] 전송 실패 (무시): {e}", flush=True)
+
+
 def _process_frame(frame: np.ndarray) -> None:
-    global latest_result, _latest_frame
+    global latest_result, _latest_frame, _last_sent_raw
 
     raw, mode = _try_decode(frame)
 
@@ -169,6 +194,13 @@ def _process_frame(frame: np.ndarray) -> None:
             "timestamp": time.time(),
         }
         print(f"[QR] {raw} (mode={mode})")
+
+        # 웹훅: 같은 QR이 연속으로 인식되면 중복 전송 방지
+        if WEBHOOK_URL and raw != _last_sent_raw:
+            _last_sent_raw = raw
+            threading.Thread(
+                target=_send_webhook, args=(raw, mode), daemon=True
+            ).start()
     else:
         latest_result = {
             "detected":  False,
@@ -177,6 +209,8 @@ def _process_frame(frame: np.ndarray) -> None:
             "mode":      None,
             "timestamp": time.time(),
         }
+        # QR이 사라지면 리셋 → 같은 QR이 다시 나타날 때 재전송
+        _last_sent_raw = ""
 
     with _frame_lock:
         _latest_frame = (frame, latest_result)
@@ -208,26 +242,38 @@ def _udp_receiver_loop(udp_port: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="QR 코드 인식 서버")
-    parser.add_argument("--udp-port", type=int, default=5010,
+    parser.add_argument("--udp-port",    type=int, default=5010,
                         help="stream_sender UDP 수신 포트 (기본: 5010)")
-    parser.add_argument("--host",     default="0.0.0.0")
-    parser.add_argument("--port",     type=int, default=8083,
+    parser.add_argument("--host",        default="0.0.0.0")
+    parser.add_argument("--port",        type=int, default=8083,
                         help="HTTP 서버 포트 (기본: 8083)")
-    parser.add_argument("--roi",      type=float, nargs=4,
+    parser.add_argument("--roi",         type=float, nargs=4,
                         default=[0.20, 0.55, 0.80, 1.00],
                         metavar=("X1", "Y1", "X2", "Y2"),
                         help="ROI 비율 (기본: 0.20 0.55 0.80 1.00)")
-    parser.add_argument("--preview",  action="store_true",
+    parser.add_argument("--webhook-url", default="",
+                        help="QR 인식 결과를 전송할 웹훅 URL "
+                             "(예: http://moosinsa-service:8005/qr_product_info). "
+                             "미지정 시 웹훅 비활성.")
+    parser.add_argument("--robot-id",    default="unknown",
+                        help="웹훅 payload의 robot_id (기본: unknown)")
+    parser.add_argument("--preview",     action="store_true",
                         help="cv2.imshow로 인식 결과 실시간 표시")
     args = parser.parse_args()
 
-    global ROI_RATIOS
-    ROI_RATIOS = args.roi
+    global ROI_RATIOS, WEBHOOK_URL, ROBOT_ID
+    ROI_RATIOS  = args.roi
+    WEBHOOK_URL = args.webhook_url
+    ROBOT_ID    = args.robot_id
 
     print(f"[INFO] QR 인식 서버 시작")
     print(f"  UDP 수신:  0.0.0.0:{args.udp_port}")
     print(f"  HTTP 서버: http://{args.host}:{args.port}")
     print(f"  ROI:       {ROI_RATIOS}")
+    if WEBHOOK_URL:
+        print(f"  웹훅:      {WEBHOOK_URL}  (robot_id={ROBOT_ID})")
+    else:
+        print(f"  웹훅:      비활성 (--webhook-url 미지정)")
 
     udp_thread = threading.Thread(
         target=_udp_receiver_loop, args=(args.udp_port,), daemon=True

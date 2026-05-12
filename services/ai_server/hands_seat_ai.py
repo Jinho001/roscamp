@@ -113,6 +113,7 @@ locked_rois  = set()
 _tcp_client_sock = None
 _tcp_client_lock = threading.Lock()
 _tcp_send_q      = queue.Queue(maxsize=2)
+_tcp_out_sock    = None
 
 
 def _tcp_conn_monitor(conn, addr):
@@ -174,21 +175,39 @@ def tcp_server_thread():
 
 
 def send_tcp_message(result_dict: dict):
-    global _tcp_client_sock
+    global _tcp_client_sock, _tcp_out_sock
     payload = json.dumps(result_dict).encode("utf-8")
     header  = struct.pack("!I", len(payload))
     with _tcp_client_lock:
         sock = _tcp_client_sock
+
     if sock is None:
-        print("[TCP] Main server not connected — dropped")
-        return
+        with _tcp_client_lock:
+            sock = _tcp_out_sock
+            if sock is None:
+                try:
+                    sock = socket.create_connection(
+                        (MAIN_SERVER_IP, AI_TCP_PORT), timeout=2.0)
+                    _tcp_out_sock = sock
+                    print(f"[TCP] Connected to main server {MAIN_SERVER_IP}:{AI_TCP_PORT}")
+                except Exception as e:
+                    print(f"[TCP] Main server not connected — dropped ({e})")
+                    return
+
     try:
         sock.sendall(header + payload)
         print(f"[TCP] → main server {len(payload)}B  type={result_dict.get('type')}")
     except Exception as e:
         print(f"[TCP] Send error: {e}")
         with _tcp_client_lock:
-            _tcp_client_sock = None
+            if _tcp_client_sock is sock:
+                _tcp_client_sock = None
+            if _tcp_out_sock is sock:
+                _tcp_out_sock = None
+        try:
+            sock.close()
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -701,6 +720,7 @@ class HandsSeatAI:
             _enqueue_tcp({
                 "type":            "vision_result",
                 "robot_id":        robot_id,
+                "frame_id":        frame_id_meta,
                 "detection_count": len(detections),
                 "detections":      detections,
                 "goal_count":      len(goals),
@@ -717,6 +737,7 @@ class HandsSeatAI:
             _enqueue_tcp({
                 "type":        "seat_result",
                 "robot_id":    robot_id,
+                "frame_id":    frame_id_meta,
                 "seat_count":  len(seat_rois),
                 "seat_status": [1 if occ else 0 for _, occ in seat_status],
                 "target_id":   self._target_id,

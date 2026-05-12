@@ -298,38 +298,44 @@ class YOLOResultServer:
 
     def _handle_conn(self, conn: socket.socket, addr):
         try:
-            raw_len = recv_exact_bytes(conn, 4)
-            if not raw_len:
-                return
-            length   = struct.unpack("!I", raw_len)[0]
-            raw_data = recv_exact_bytes(conn, length)
-            if not raw_data:
-                return
+            while True:
+                raw_len = recv_exact_bytes(conn, 4)
+                if not raw_len:
+                    return
+                length = struct.unpack("!I", raw_len)[0]
+                if length <= 0 or length > MAX_JSON_SIZE:
+                    raise ValueError(f"비정상 JSON 크기: {length}B")
 
-            result   = json.loads(raw_data.decode("utf-8"))
-            msg_type = result.get("type") or ("seat_status" if "seats" in result else None)
-            ts       = time.strftime("%Y-%m-%d %H:%M:%S")
+                raw_data = recv_exact_bytes(conn, length)
+                if not raw_data:
+                    return
 
-            if msg_type == "seat_status":
-                seats = result.get("seats")
-                with self._lock:
-                    self.latest_seat_status = seats
-                _write_tcp_backlog(f"{ts} [TCP 수신 완료] seat_result seat_status={seats}")
-                if self._on_seat_status is not None:
-                    self._on_seat_status(seats)
-            else:
-                with self._lock:
-                    self.latest_result = result
-                _write_tcp_backlog(
-                    f"{ts} [TCP 수신 완료] "
-                    f"type={result.get('type')} "
-                    f"frame_id={result.get('frame_id')} "
-                    f"goals={len(result.get('goals') or [])} "
-                    f"process_ms={result.get('process_ms')}ms"
-                )
-                if self.robot_bridge is not None:
-                    self.robot_bridge.handle_result(result)
-                self._forward_to_cam_ui(raw_data)
+                result = json.loads(raw_data.decode("utf-8"))
+                msg_type = result.get("type") or ("seat_status" if "seats" in result else None)
+                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+
+                if msg_type in ("seat_status", "seat_result"):
+                    seats = result.get("seats")
+                    if seats is None:
+                        seats = result.get("seat_status")
+                    with self._lock:
+                        self.latest_seat_status = seats
+                    _write_tcp_backlog(f"{ts} [TCP 수신 완료] seat_result seat_status={seats}")
+                    if self._on_seat_status is not None:
+                        self._on_seat_status(seats)
+                else:
+                    with self._lock:
+                        self.latest_result = result
+                    _write_tcp_backlog(
+                        f"{ts} [TCP 수신 완료] "
+                        f"type={result.get('type')} "
+                        f"frame_id={result.get('frame_id')} "
+                        f"goals={len(result.get('goals') or [])} "
+                        f"process_ms={result.get('process_ms')}ms"
+                    )
+                    if self.robot_bridge is not None:
+                        self.robot_bridge.handle_result(result)
+                    self._forward_to_cam_ui(raw_data)
 
         except Exception as e:
             _tcp_log.error("[TCP] 처리 오류: %s", e)
