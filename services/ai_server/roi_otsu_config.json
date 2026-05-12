@@ -1,0 +1,6 @@
+{
+  "white_delta": 200,
+  "sol_delta": 0.1,
+  "reach_delta": 0.35,
+  "reach_abs": 1.65
+}
