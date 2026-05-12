@@ -2556,6 +2556,54 @@ async def ws_admin(ws: WebSocket):
 
 
 # ══════════════════════════════════════════════════════════════
+# [jetcobot QR] FrontJet / WareJet → Moosinsa Service          [요청]
+#     프로토콜: HTTP (FastAPI 엔드포인트, port 8005), JSON body
+#     jetcobot Pi(front_jet/ware_jet)에서 QR 인식 후 디코드된
+#     product 정보를 송신. 현재는 수신/로깅만 처리하며 DB 연동은
+#     후속 작업으로 분리한다.
+#     송신 테스트: Swagger UI(/docs)의 "POST /qr_product_info"
+#     → Try it out → Execute 로 검증 가능.
+#
+#     엔드포인트:
+#       POST /qr_product_info  - QR 디코드 결과 수신 (JSON)
+# ══════════════════════════════════════════════════════════════
+
+class QrProductInfo(BaseModel):  # [요청]
+    """
+    jetcobot(front_jet/ware_jet)에서 QR 인식 후 송신하는 product 정보.
+    Content-Type: application/json
+    """
+    robot_id: str = Field(
+        ...,
+        description="송신 로봇 ID",
+        examples=["front_jet", "ware_jet"],
+    )
+    product_id: str = Field(
+        ...,
+        description="QR 에서 추출된 product 식별자",
+        examples=["P-12345"],
+    )
+    raw_payload: Optional[str] = Field(
+        None,
+        description="QR 원본 문자열 (디버깅용, 선택)",
+        examples=["P-12345"],
+    )
+
+
+@app.post("/qr_product_info", status_code=200)  # [요청]
+async def endpoint_qr_product_info(msg: QrProductInfo):
+    """
+    [요청] jetcobot QR 인식 결과 수신 엔드포인트.
+    현재는 수신/로깅만 수행. DB 조회·후속 로직은 추후 추가.
+    """
+    print(f"[QR] 수신: robot_id={msg.robot_id}, product_id={msg.product_id}, raw={msg.raw_payload}")
+    return {
+        "result": "ok",
+        "received": msg.model_dump(),
+    }
+
+
+# ══════════════════════════════════════════════════════════════
 # 엔트리포인트
 # ══════════════════════════════════════════════════════════════
 
