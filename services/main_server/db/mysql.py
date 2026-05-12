@@ -174,3 +174,59 @@ def get_shoe_information_by_shoe_id_from_inventory(shoe_id: str):
             cursor.close()
         if conn:
             conn.close()
+
+
+# ─────────────────────────────────────────────────────────────
+# [요청] 시착 요청 시 shoes_inventory stock=0 처리 (variant 단위)
+# ─────────────────────────────────────────────────────────────
+def set_variant_stock_zero(shoe_id: str, color: str, size) -> int:
+    """
+    [요청] shoes_inventory 의 (shoe_id + color + size) variant row 의 stock 을 0 으로 set.
+
+    /tryon/request 직후 호출되어 동일 variant 의 중복 시착 요청을 막는 용도.
+    size 컬럼이 DECIMAL/INT 이고 클라이언트는 문자열을 보내므로
+    SQL 내에서 DECIMAL 캐스팅하여 비교한다.
+
+    Returns:
+        업데이트된 row 개수 (매칭 없으면 0).
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        sql = """
+            UPDATE shoes_inventory
+               SET stock = 0
+             WHERE shoe_id = %s
+               AND TRIM(color) = TRIM(%s)
+               AND CAST(size AS DECIMAL(10,4)) = CAST(%s AS DECIMAL(10,4))
+        """
+        cursor.execute(sql, (shoe_id, color, size))
+        conn.commit()
+        return cursor.rowcount
+
+    except mysql.connector.Error as e:
+        print("MySQL 오류:", e)
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"MySQL 오류: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("서버 오류:", e)
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"서버 오류: {str(e)}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
