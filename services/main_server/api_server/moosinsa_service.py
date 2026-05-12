@@ -72,8 +72,8 @@ from db.mysql import (
 from dotenv import load_dotenv
 import os
 
-from UDP.udp import CameraUDPRelay
-from TCP.tcp_receiver import YOLOResultServer
+from api_server.UDP.udp import CameraUDPRelay
+from api_server.TCP.tcp_receiver import YOLOResultServer
 
 load_dotenv()
 
