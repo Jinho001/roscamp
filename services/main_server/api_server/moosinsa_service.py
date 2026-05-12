@@ -2385,6 +2385,41 @@ async def api_schedule():
                 "completed_at": t.get("completed_at"),
             })
 
+    # [scheduleDB연동] inbound_demo 는 RobotManager TaskRecord 가 아니라 별도 오케스트레이터.
+    # 참여 sshopy 각각을 schedule row 로 합성해 다른 task 와 동일한 형식으로 노출한다.
+    try:
+        demo = fleet.inbound_demo.get_status()
+    except Exception:
+        demo = None
+    if demo and (demo.get("started_at") or 0) > 0:
+        active        = bool(demo.get("active"))
+        total_qty     = demo.get("total_quantity") or 0
+        remain_qty    = demo.get("quantity_remaining") or 0
+        tasks_total   = demo.get("tasks_total") or 0
+        tasks_remain  = demo.get("tasks_remaining") or 0
+        cycle_done    = max(tasks_total - tasks_remain, 0)
+        progress_tail = (
+            f" · 사이클 {cycle_done}/{tasks_total} · 남은 물량 {remain_qty}/{total_qty}"
+        )
+        robot_ids  = demo.get("robot_ids") or list((demo.get("robots") or {}).keys())
+        robots_map = demo.get("robots") or {}
+        for rid in robot_ids:
+            info = robots_map.get(rid, {})
+            stage_label_base = info.get("stage_label") or "—"
+            stage_label = (
+                stage_label_base + progress_tail if active
+                else f"완료 · 총 {total_qty}개 입고"
+            )
+            rows.append({
+                "task_id":      f"DEMO-INB-{rid}",
+                "robot":        _ROBOT_ID_TO_DISPLAY.get(rid, rid),
+                "task_name":    "입고",
+                "status":       "진행중" if active else "완료",
+                "stage_label":  stage_label,
+                "started_at":   demo.get("started_at"),
+                "completed_at": demo.get("completed_at") or None,
+            })
+
     # 최신 시작순 정렬 + 50건 제한
     rows.sort(key=lambda r: r.get("started_at") or 0, reverse=True)
     return rows[:50]

@@ -95,6 +95,11 @@ class InboundDemoOrchestrator:
         self._active = False
         self._robot_stages: dict[str, int] = {}
         self._started_at: float = 0.0
+        # [scheduleDB연동] /api/schedule 에 노출하기 위한 완료 시각.
+        # _wait_done 시점에 설정, 다음 start() 시 0.0 으로 리셋.
+        self._completed_at: float = 0.0
+        # [scheduleDB연동] start 시점의 참여 로봇 순서 — schedule row 합성 시 정렬용.
+        self._participating_robots: list[str] = []
         # Task pool — sshopy 수 + EXTRA_TASKS 만큼 큐 처리. 마지막 task 처리하는 sshopy가 서브존 스킵.
         self._task_counter_lock = threading.Lock()
         self._tasks_remaining = 0
@@ -116,6 +121,10 @@ class InboundDemoOrchestrator:
             "quantity_remaining": self._quantity_remaining,
             "tasks_total":        self._tasks_total,
             "tasks_remaining":    self._tasks_remaining,
+            # [scheduleDB연동] /api/schedule 에서 row 합성 시 사용
+            "started_at":   self._started_at,
+            "completed_at": self._completed_at,
+            "robot_ids":    list(self._participating_robots),
             "robots": {
                 rid: {
                     "stage":       stage,
@@ -158,6 +167,8 @@ class InboundDemoOrchestrator:
             self._stop.clear()
             self._active = True
             self._started_at = time.time()
+            self._completed_at = 0.0   # [scheduleDB연동] 이전 세션 완료 시각 초기화
+            self._participating_robots = list(valid)  # [scheduleDB연동] 참여 로봇 순서 보존
             self._threads = []
             self._robot_stages = {rid: DEMO_STAGE_QUEUED for rid in valid}
             for rid in valid:
@@ -211,6 +222,7 @@ class InboundDemoOrchestrator:
         for t in self._threads:
             t.join()
         self._active = False
+        self._completed_at = time.time()   # [scheduleDB연동] 완료 시각 기록
         for rid in list(self._robot_stages.keys()):
             state = self.fleet._states.get(rid)
             if state:
