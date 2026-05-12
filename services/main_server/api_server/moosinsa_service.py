@@ -67,6 +67,7 @@ from db.mysql import (
     get_shoe_all_information,
     get_shoe_information_by_shoe_id,
     get_shoe_information_by_shoe_id_from_inventory,
+    set_variant_stock_zero,  # [요청] 시착 요청 시 shoes_inventory stock=0 처리용
 )
 
 from dotenv import load_dotenv
@@ -1249,6 +1250,29 @@ async def endpoint_tryon_request(req: _TryonReq):
         f"[tryon/request] 시착 시작 → robot={assigned} (client hint={req.robot_id}) "
         f"seat={req.seat_id} product={req.product_id} color={req.color} size={req.size}"
     )
+
+    # [요청] 시착 요청 즉시 shoes_inventory 의 해당 variant stock=0 처리 (best-effort).
+    #   - phone_ui / kiosk_ui 모두 product_id 필드에 shoe_id 값을 담아 전송한다.
+    #   - 매칭 키: shoe_id + color + size (/kiosk/stock/check 조회 키와 동일).
+    #   - DB 실패는 로깅만 하고 시착 시퀀스는 계속 진행 (race-safe 트랜잭션은 TC 2-08 TODO).
+    if req.color is not None and req.size is not None:
+        try:
+            affected = set_variant_stock_zero(req.product_id, req.color, req.size)
+            logger.info(
+                f"[tryon/request][stock] shoes_inventory stock=0 set "
+                f"shoe_id={req.product_id} color={req.color} size={req.size} affected={affected}"
+            )
+        except Exception as e:
+            logger.error(
+                f"[tryon/request][stock] stock=0 set 실패(시착은 계속): {e} "
+                f"shoe_id={req.product_id} color={req.color} size={req.size}"
+            )
+    else:
+        logger.warning(
+            f"[tryon/request][stock] color/size 누락 → stock=0 set 생략 "
+            f"(shoe_id={req.product_id} color={req.color} size={req.size})"
+        )
+
     return {
         "success":    True,
         "robot_id":   assigned,
