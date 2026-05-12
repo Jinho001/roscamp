@@ -60,8 +60,8 @@ retrieval_watcher_node:
   ros__parameters:
     obb_topic:           "/detect_bridge_node/obb_boxes"
     confirm_secs:        3.0
-    slot_x_start:        40.0    # 슬롯 0 좌측 cx 실측값 (cx=50 감지 확인)
-    slot_x_end:         562.0    # 슬롯 3 우측 cx 실측값
-    slot_x_boundaries:  [167.0, 327.0, 484.0]  # 열 경계 cx
-    slot_cy_mid:         222.0   # 상단/하단 구분선 cy
+    slot_x_start:         98.0    # 슬롯 0 좌측 cx (1번 칸 실측)
+    slot_x_end:          550.0   # 슬롯 3 우측 cx (4번 칸 실측)
+    slot_x_boundaries:  [211.0, 324.0, 437.0]  # 열 경계 cx
+    slot_cy_mid:         234.0   # 상단/하단 구분선 cy ((388+80)/2)
     fms_url:            "http://192.168.1.130:8002"

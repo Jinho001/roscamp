@@ -75,7 +75,11 @@ export default function ProductDetailPage() {
 
 
    // 좌석 정보 
-  const [seatStatus, setSeatStatus] = useState<number[]>([0, 0, 0, 0]);
+  type SeatStatusItem = {
+    seat_id: number;
+    occupied: boolean;
+  };
+  const [seatStatus, setSeatStatus] = useState<SeatStatusItem[]>([]);
 
   // 시착 요청
   const [tryOnPopupOpen, setTryOnPopupOpen] = useState(false);
@@ -906,9 +910,11 @@ export default function ProductDetailPage() {
               <div className="seat-zone-label">시착 구역</div>
               <div className="seat-area">
                 {[1, 4, 2, 3].map((s) => {
-                  const idx = seats.indexOf(s); 
-                  const occupied = seatStatus[idx] === 1;
-
+                  const seatInfo = seatStatus.find(
+                    (item) => item.seat_id === s
+                  );
+                  const occupied = seatInfo?.occupied ?? false;
+                 
                   return (
                     <button
                       key={s}

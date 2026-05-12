@@ -33,8 +33,8 @@ Role      : 시스템 중앙 백엔드 서버 (FastAPI).
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))  # main_server/ (fms, db 패키지)
-sys.path.insert(0, str(Path(__file__).parent))          # api_server/ (TCP, UDP 패키지)
+
+sys.path.insert(0, str(Path(__file__).parent))
 
 import asyncio
 import json
@@ -1632,8 +1632,8 @@ class KioskPageEvent(BaseModel):                          # ★ NEW ★
 
 _STORE_INFO = {                                           # ★ NEW ★
     "hours": [
-        {"label": "평일",  "time": "10:00 – 21:00"},
-        {"label": "주말",  "time": "10:00 – 22:00"},
+        {"label": "평일",  "time": "10:00 ~ 21:00"},
+        {"label": "주말",  "time": "10:00 ~ 22:00"},
     ],
     "closed": [
         "매월 첫째 월요일 정기 휴무",
@@ -1690,6 +1690,140 @@ async def endpoint_kiosk_page_event(ev: KioskPageEvent):
         f"{ev.prev or 'START'} → {ev.page}"
     )
     return {"received": True, "page": ev.page}
+
+
+# ══════════════════════════════════════════════════════════════
+# [sshopylcd연동] SShopy LCD UI 엔드포인트
+#
+# 흐름:
+#   LCD → POST /sshopylcd/guide/start  → fleet.start_guide() → goal_pose 발행
+#                                       ← {success, robot_id, task_id}
+#   LCD ⇄ GET  /sshopylcd/guide/status  (2초 polling)
+#                                       ← {robot_id, task_id, stage, stage_label,
+#                                          arrived(==AT_SHELF), completed}
+#   LCD → POST /sshopylcd/guide/end    → fleet.end_guide() → 홈 복귀 명령
+#                                       ← {success, robot_id}
+#   LCD → POST /sshopylcd/page_event   (fire-and-forget 로깅)
+# ══════════════════════════════════════════════════════════════
+
+class SshopyLcdPageEvent(BaseModel):
+    """LCD 페이지 전환 이벤트 (fire-and-forget 로깅용)."""
+    page:     str
+    prev:     Optional[str] = None
+    robot_id: str = "sshopy2"
+
+
+class SshopyLcdGuideStartReq(BaseModel):
+    """LCD 안내 시작 요청 — fleet.start_guide() 인자."""
+    robot_id:  str = "sshopy2"
+    shoe_id:   str
+    shoe_name: Optional[str] = ""
+
+
+class SshopyLcdGuideEndReq(BaseModel):
+    """LCD 안내 종료 요청 — fleet.end_guide() 인자."""
+    robot_id: str = "sshopy2"
+
+
+# [sshopylcd연동] LCD 페이지 전환 이력 (인메모리, 최근 200건)
+_sshopylcd_page_log: list[dict] = []
+
+
+@app.post("/sshopylcd/page_event", status_code=200)
+async def endpoint_sshopylcd_page_event(ev: SshopyLcdPageEvent):
+    """SShopy LCD 페이지 전환 이벤트 수신 — 로깅 전용 (fire-and-forget)."""
+    import datetime
+    record = {
+        "robot_id":  ev.robot_id,
+        "page":      ev.page,
+        "prev":      ev.prev,
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    _sshopylcd_page_log.append(record)
+    if len(_sshopylcd_page_log) > 200:
+        _sshopylcd_page_log.pop(0)
+
+    logger.info(
+        f"[sshopylcd/page_event] robot={ev.robot_id} "
+        f"{ev.prev or 'START'} → {ev.page}"
+    )
+    return {"received": True, "page": ev.page}
+
+
+@app.post("/sshopylcd/guide/start")
+async def endpoint_sshopylcd_guide_start(req: SshopyLcdGuideStartReq):
+    """
+    안내 시작 — robot_id 의 SShopy 를 진열대 좌표로 이동시키고 GuideTask 를 생성.
+
+    LCD 는 응답의 task_id 를 보관하여 /sshopylcd/guide/status 폴링에 사용한다.
+    실패 시 HTTP 409 (가용 로봇 없음 / 이미 작업 중 / 미연결 등).
+    """
+    ok, msg, task_id = fleet.start_guide(
+        robot_id=req.robot_id,
+        shoe_id=req.shoe_id,
+        shoe_name=req.shoe_name or "",
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    logger.info(
+        f"[sshopylcd/guide/start] robot={req.robot_id} task={task_id} "
+        f"shoe_id={req.shoe_id} name={req.shoe_name}"
+    )
+    return {
+        "success":  True,
+        "robot_id": req.robot_id,
+        "task_id":  task_id,
+    }
+
+
+@app.post("/sshopylcd/guide/end")
+async def endpoint_sshopylcd_guide_end(req: SshopyLcdGuideEndReq):
+    """
+    안내 종료 — 사용자가 LCD '안내 종료' 버튼을 누른 시점에 호출.
+    fleet 가 해당 SShopy 의 홈 좌표로 goal_pose 를 발행한다.
+
+    실패(진열대 도착 상태가 아닌 경우 등) 시 HTTP 409.
+    """
+    ok, msg = fleet.end_guide(req.robot_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    logger.info(f"[sshopylcd/guide/end] robot={req.robot_id}")
+    return {"success": True, "robot_id": req.robot_id}
+
+
+@app.get("/sshopylcd/guide/status")
+async def endpoint_sshopylcd_guide_status(robot_id: str = "sshopy2"):
+    """
+    안내 진행 상태 조회 — LCD 가 2초 주기로 폴링.
+
+    응답:
+      task_id   : 진행 중 task ID (없으면 None)
+      stage     : GUIDE_STAGE_* (없으면 None)
+      stage_label : 화면 표시용 한글 라벨
+      arrived   : stage == GUIDE_STAGE_AT_SHELF 여부 (LCD 가 완료 팝업 트리거)
+      completed : task record 완료 플래그 (홈 복귀까지 완료 시 True)
+    """
+    from fms.robot_manager import GUIDE_STAGE_AT_SHELF, GUIDE_STAGE_LABELS
+
+    task = fleet.get_active_guide(robot_id)
+    if not task:
+        return {
+            "robot_id":    robot_id,
+            "task_id":     None,
+            "stage":       None,
+            "stage_label": None,
+            "arrived":     False,
+            "completed":   False,
+        }
+    stage = task.get("stage")
+    return {
+        "robot_id":    robot_id,
+        "task_id":     task.get("task_id"),
+        "stage":       stage,
+        "stage_label": task.get("stage_label"),
+        "arrived":     stage == GUIDE_STAGE_AT_SHELF,
+        "completed":   bool(task.get("completed")),
+    }
 
 
 @app.get("/kiosk/store_info")                            # ★ NEW ★
@@ -2141,9 +2275,13 @@ class _AdminRobotStartReq(BaseModel):
 
 
 class _AdminInboundStartReq(BaseModel):
-    # admin GUI 의 '입고 시작' 버튼은 본문 없이 호출 — 데모용 기본 1건 입고 트리거
-    robot_id: Optional[str] = None
-    items:    Optional[list] = None
+    # [실로봇연동][다중로봇dispatcher] admin GUI '입고 시작' 버튼 → fleet.inbound_demo.start(robot_ids).
+    # React admin_ui 의 /inbound_demo/start 와 동일 페이로드. FrontJet/창고존/서브존 mutex 로 직렬화.
+    # 우선순위 순서 (앞에 있을수록 FrontJet 락 먼저 획득). 미지정 시 백엔드 기본값.
+    robot_ids: list[str] = ["sshopy2", "sshopy1", "sshopy3"]
+    # [입고물량loop] 총 입고 물량 — 사이클당 -2, 0 될 때까지 유휴 sshopy loop.
+    # None/0 이면 기존 동작(sshopy 수 + EXTRA_TASKS) 유지.
+    total_quantity: Optional[int] = None
 
 
 # ── [monitoring_ui] 엔드포인트 ─────────────────────────────────────────────────
@@ -2232,6 +2370,7 @@ async def api_schedule():
         ("회수", fleet.get_all_retrieval_tasks()),
         ("시착", fleet.get_all_tryon_tasks()),
         ("배달", fleet.get_all_delivery_tasks()),
+        ("안내", fleet.get_all_guide_tasks()),  # [sshopylcd연동]
     ]
 
     rows: list[dict] = []
@@ -2245,6 +2384,41 @@ async def api_schedule():
                 "stage_label":  t.get("stage_label"),
                 "started_at":   t.get("created_at"),
                 "completed_at": t.get("completed_at"),
+            })
+
+    # [scheduleDB연동] inbound_demo 는 RobotManager TaskRecord 가 아니라 별도 오케스트레이터.
+    # 참여 sshopy 각각을 schedule row 로 합성해 다른 task 와 동일한 형식으로 노출한다.
+    try:
+        demo = fleet.inbound_demo.get_status()
+    except Exception:
+        demo = None
+    if demo and (demo.get("started_at") or 0) > 0:
+        active        = bool(demo.get("active"))
+        total_qty     = demo.get("total_quantity") or 0
+        remain_qty    = demo.get("quantity_remaining") or 0
+        tasks_total   = demo.get("tasks_total") or 0
+        tasks_remain  = demo.get("tasks_remaining") or 0
+        cycle_done    = max(tasks_total - tasks_remain, 0)
+        progress_tail = (
+            f" · 사이클 {cycle_done}/{tasks_total} · 남은 물량 {remain_qty}/{total_qty}"
+        )
+        robot_ids  = demo.get("robot_ids") or list((demo.get("robots") or {}).keys())
+        robots_map = demo.get("robots") or {}
+        for rid in robot_ids:
+            info = robots_map.get(rid, {})
+            stage_label_base = info.get("stage_label") or "—"
+            stage_label = (
+                stage_label_base + progress_tail if active
+                else f"완료 · 총 {total_qty}개 입고"
+            )
+            rows.append({
+                "task_id":      f"DEMO-INB-{rid}",
+                "robot":        _ROBOT_ID_TO_DISPLAY.get(rid, rid),
+                "task_name":    "입고",
+                "status":       "진행중" if active else "완료",
+                "stage_label":  stage_label,
+                "started_at":   demo.get("started_at"),
+                "completed_at": demo.get("completed_at") or None,
             })
 
     # 최신 시작순 정렬 + 50건 제한
@@ -2448,14 +2622,37 @@ async def api_robot_manual(name: str):
 
 @app.post("/api/inbound/start")
 async def api_inbound_start(req: Optional[_AdminInboundStartReq] = None):
+    """[실로봇연동][다중로봇dispatcher] 입고 시작 버튼.
+
+    React admin_ui 의 /inbound_demo/start 와 동일한 다중-sshopy 입고 dispatcher
+    호출. fleet.inbound_demo (InboundDemoOrchestrator) 가 FrontJet/창고존/서브존
+    ResourceLock 으로 직렬화해 HOME → FrontJet → 창고존 → 서브존 → HOME 흐름을
+    각 sshopy 별 worker thread 로 진행한다.
+
+    body 미지정 시 기본값 ["sshopy2","sshopy1","sshopy3"] 사용 (React 와 동일).
+
+    [입고물량loop] total_quantity 지정 시 사이클당 -2 로 환산해 task pool 크기 결정.
+    quantity=0 까지 유휴 sshopy 가 loop 돌고, 0 이 되면 모든 워커 종료.
     """
-    [monitoring_ui] 입고 시작 버튼 — 본문 없이도 호출 가능 (items=[] 데모).
-    실제 운용 시 admin GUI 에서 입고할 상품 목록을 전달하도록 확장 필요.
+    rids = (req.robot_ids if req else None) or ["sshopy2", "sshopy1", "sshopy3"]
+    total_quantity = req.total_quantity if req else None
+    ok, msg = fleet.inbound_demo.start(rids, total_quantity=total_quantity)
+    return {
+        "ok": ok,
+        "message": msg,
+        "robot_ids": rids,
+        "total_quantity": total_quantity,
+    }
+
+
+@app.get("/api/inbound/status")
+async def api_inbound_status():
+    """[입고물량loop] monitoring_ui 가 폴링 — 입고 진행 상황 + 완료 감지에 사용.
+
+    응답 예: {active, total_quantity, quantity_remaining, tasks_total, tasks_remaining, robots}
+    active 가 True→False 로 전이하면 UI 가 '입고 완료' 메시지를 띄운다.
     """
-    items = req.items if req and req.items else []
-    rid   = req.robot_id if req else None
-    ok, msg, task_id = fleet.start_inbound(items=items, robot_id=rid)
-    return {"ok": ok, "message": msg, "task_id": task_id}
+    return fleet.inbound_demo.get_status()
 
 
 @app.post("/api/emergency/stop")

@@ -164,6 +164,27 @@ INBOUND_STAGE_LABELS = {
 INBOUND_TIMEOUT = 300   # 각 단계별 timeout (초)
 
 
+# ── [sshopylcd연동] 안내 시나리오 (Scene 5) 웨이포인트 / stage 상수 ─────────────
+# SShopy LCD UI 가 호출: 고객이 상품 위치 안내를 요청하면 SShopy 가 진열대로 이동,
+# 도착 후 LCD 가 polling 으로 감지하여 안내 완료 메시지 표시.
+# 사용자가 '안내 종료' 를 누르면 홈으로 복귀 → 시나리오 종료.
+# 40번대 사용 (배달 0~2, 시착 10~15, 회수 20~26, 입고 30~35 와 충돌 회피).
+
+# TODO(실로봇테스트): 데모용 임의 좌표 — 실제 매장에서는 shoe_id → 진열대 좌표
+# 매핑으로 교체. start_guide() 에서 shoe_id 별 lookup 으로 확장 예정.
+GUIDE_DEMO_TARGET = {"x": 0.918, "y": 0.426, "theta": 1.655}
+
+GUIDE_STAGE_TO_SHELF = 40  # 진열대 이동 중
+GUIDE_STAGE_AT_SHELF = 41  # 진열대 도착 — 안내 종료 대기 (LCD polling)
+GUIDE_STAGE_TO_HOME  = 42  # 홈 복귀 중
+
+GUIDE_STAGE_LABELS = {
+    GUIDE_STAGE_TO_SHELF: "진열대 이동 중",
+    GUIDE_STAGE_AT_SHELF: "진열대 도착 — 안내 종료 대기",
+    GUIDE_STAGE_TO_HOME:  "홈 복귀 중",
+}
+
+
 # ── [Scene 1] 입고 Task 데이터클래스 ─────────────────────────────────────────────
 @dataclass
 class InboundItem:
@@ -317,6 +338,44 @@ class DeliveryTask:
         }
 
 
+# ── [sshopylcd연동] 안내 Task 데이터클래스 ─────────────────────────────────────
+@dataclass
+class GuideTask:
+    """안내 task 1건의 상태 — 시착/배달과 동일한 패턴.
+
+    SShopy LCD UI 의 '안내 시작' 요청으로 생성. 도착 → 안내 종료 → 홈 복귀 흐름.
+    schedule UI 이력 표시용으로 누적 (완료 후에도 dict 에서 제거하지 않고
+    completed=True 마킹만).
+    """
+    task_id:          str
+    robot_id:         str
+    stage:            int  = GUIDE_STAGE_TO_SHELF
+    shoe_id:          Optional[str] = None
+    shoe_name:        Optional[str] = None
+    created_at:       float = field(default_factory=time.time)
+    stage_started_at: float = field(default_factory=time.time)
+    completed_at:     Optional[float] = None
+    completed:        bool  = False
+    error:            Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id":      self.task_id,
+            "robot_id":     self.robot_id,
+            "stage":        self.stage,
+            "stage_label":  GUIDE_STAGE_LABELS.get(
+                self.stage, "완료" if self.completed else "알 수 없음"
+            ),
+            "shoe_id":      self.shoe_id,
+            "shoe_name":    self.shoe_name,
+            "elapsed":      round(time.time() - self.created_at, 1),
+            "created_at":   self.created_at,
+            "completed_at": self.completed_at,
+            "completed":    self.completed,
+            "error":        self.error,
+        }
+
+
 # ── per-robot state ────────────────────────────────────────────────────────────
 
 class _RobotState:
@@ -330,6 +389,8 @@ class _RobotState:
         self.joint_states: dict | None = None
         self.busy                  = False
         self.last_work_complete: str | None = None
+        # trigger_work → work_complete 블로킹 대기용 (front_jet 등 jetcobot 트리거)
+        self._work_complete_event: threading.Event = threading.Event()
 
         # 배달 시나리오 상태
         self.delivery_stage: int | None = None
@@ -360,6 +421,12 @@ class _RobotState:
 
         # [Scene 1 확장] 입고 데모 시나리오 상태 — DEMO_STAGE_* 상수
         self.inbound_demo_stage: Optional[int] = None  # 현재 입고 데모 stage
+
+        # [sshopylcd연동] 안내 시나리오 상태 — GUIDE_STAGE_* 상수
+        self.guide_task_id: Optional[str] = None
+        self.guide_stage:   Optional[int] = None
+        self.guide_shoe_id: Optional[str] = None
+        self.guide_shoe_name: Optional[str] = None
 
     def to_dict(self) -> dict:
         """
@@ -394,6 +461,11 @@ class _RobotState:
             "retrieval_stage":    self.retrieval_stage,
             # [Scene 1 확장] 입고 데모 상태
             "inbound_demo_stage": self.inbound_demo_stage,
+            # [sshopylcd연동] 안내 상태
+            "guide_task_id":      self.guide_task_id,
+            "guide_stage":        self.guide_stage,
+            "guide_shoe_id":      self.guide_shoe_id,
+            "guide_shoe_name":    self.guide_shoe_name,
         }
 
     def reset_live_data(self):
@@ -444,6 +516,12 @@ class RobotManager:
         self._delivery_tasks:   dict[str, DeliveryTask] = {}
         self._delivery_counter: int                     = 0
         self._delivery_lock = threading.Lock()
+
+        # ── [sshopylcd연동] 안내 task 관리 (in-memory dict) ──────────────────
+        # 시착/배달과 동일 패턴: counter 로 task_id 발급, dict 에 누적, completed 마킹만.
+        self._guide_tasks:   dict[str, GuideTask] = {}
+        self._guide_counter: int                  = 0
+        self._guide_lock = threading.Lock()
 
         # ── [실로봇연동] per-robot 로그 버퍼 — 로그확인 버튼이 사용 ──────────
         # deque(maxlen=200) 로 로봇당 최근 200건의 (timestamp, msg) 만 보관.
@@ -632,6 +710,8 @@ class RobotManager:
     @staticmethod
     def _on_work_complete(state: _RobotState, msg: dict):
         state.busy = False
+        state.last_work_complete = msg.get("data")
+        state._work_complete_event.set()
 
     def _on_nav_status(self, state: _RobotState, msg: dict):
         """
@@ -739,6 +819,39 @@ class RobotManager:
                     f"(시착) {tid} {'실패: ' + error if error else '완료'}"
                 )
         state.tryon_task_id = None
+
+    # ── [sshopylcd연동] 안내 stage·완료 갱신 헬퍼 ─────────────────────────
+    def _set_guide_stage(self, state: _RobotState, new_stage: int):
+        state.guide_stage = new_stage
+        tid = state.guide_task_id
+        if tid:
+            task = self._guide_tasks.get(tid)
+            if task:
+                task.stage = new_stage
+                task.stage_started_at = time.time()
+        label = GUIDE_STAGE_LABELS.get(new_stage, f"stage {new_stage}")
+        self._log(state.robot_id, f"(안내) → {label}")
+
+    def _finish_guide_task(self, state: _RobotState, error: Optional[str] = None):
+        """안내 task record 종료 — completed/error/completed_at 기록.
+        완료된 경우 stage=-1 sentinel (to_dict 가 '완료' 로 폴백).
+        실패/취소는 stage 유지하여 어디서 멈췄는지 표시.
+        """
+        tid = state.guide_task_id
+        if tid:
+            task = self._guide_tasks.get(tid)
+            if task and not task.completed:
+                task.completed    = True
+                task.completed_at = time.time()
+                if error:
+                    task.error = error
+                else:
+                    task.stage = -1
+                self._log(
+                    state.robot_id,
+                    f"(안내) {tid} {'실패: ' + error if error else '완료'}"
+                )
+        state.guide_task_id = None
 
     def _finish_delivery_task(self, state: _RobotState, error: Optional[str] = None):
         """[실로봇연동] 배달 task record 종료 — completed/error/completed_at 기록.
@@ -918,6 +1031,26 @@ class RobotManager:
                     f"dist={dist:.3f}m"
                 )
                 self._on_retrieval_arrived(state)
+            return
+
+        # [sshopylcd연동] 안내 시나리오 — 거리 기반 도착 판정
+        if state.guide_stage is not None:
+            target = self._guide_target(state)
+            if target is None:
+                return  # AT_SHELF: 안내 종료 대기, 도착 판정 X
+            dist = math.hypot(
+                state.pose["x"] - target["x"],
+                state.pose["y"] - target["y"],
+            )
+            now = time.time()
+            if dist < ARRIVAL_THRESHOLD and (now - state._last_arrival_time) > ARRIVAL_COOLDOWN:
+                state._last_arrival_time = now
+                print(
+                    f"[fleet] {state.robot_id} (안내) 도착 stage={state.guide_stage} "
+                    f"dist={dist:.3f}m"
+                )
+                self._on_guide_arrived(state)
+            return
 
     def _tryon_target(self, state: _RobotState) -> dict | None:
         s = state.tryon_stage
@@ -970,10 +1103,11 @@ class RobotManager:
 
         elif s == TRYON_STAGE_TO_FRONTJET:
             # 회수존 도착 → front_jet 그리퍼 → 홈 복귀
-            print(f"[fleet] {robot_id} (시착) 회수존 도착 → front_jet 팔 동작")
+            # FMS → /front_jet/trigger_work 발행, 완료 시 /front_jet/work_complete 수신 (fire-and-forget)
+            print(f"[fleet] {robot_id} (시착) 회수존 도착 → front_jet trigger_work 발행")
             threading.Thread(
-                target=self._ssh_exec,
-                args=("front_jet", self._FRONT_JET_SCRIPT),
+                target=self._trigger_work_blocking,
+                args=("front_jet", robot_id),
                 daemon=True,
             ).start()
             self._set_tryon_stage(state, TRYON_STAGE_TO_HOME)  # [실로봇연동]
@@ -1012,10 +1146,11 @@ class RobotManager:
 
         elif stage == 1:
             # 매장 도착 → front_jet 팔 동작 → 홈 복귀
-            print(f"[fleet] {robot_id} 매장 도착 → front_jet 팔 동작 시작")
+            # FMS → /front_jet/trigger_work 발행, 완료 시 /front_jet/work_complete 수신 (fire-and-forget)
+            print(f"[fleet] {robot_id} 매장 도착 → front_jet trigger_work 발행")
             threading.Thread(
-                target=self._ssh_exec,
-                args=("front_jet", self._FRONT_JET_SCRIPT),
+                target=self._trigger_work_blocking,
+                args=("front_jet", robot_id),
                 daemon=True,
             ).start()
             self._set_delivery_stage(state, 2)  # [실로봇연동]
@@ -1221,6 +1356,158 @@ class RobotManager:
         print(f"[fleet] {robot_id} 배달 시나리오 강제 중단")
         return True
 
+    # ── [sshopylcd연동] 안내 시나리오 (Scene 5) ─────────────────────────────
+    #
+    # 시나리오 흐름:
+    #   start_guide(robot_id, shoe_id, shoe_name)
+    #     → GUIDE_DEMO_TARGET 으로 goal_pose 발행
+    #     → state.guide_stage = TO_SHELF, task record 생성
+    #
+    #   [도착] _check_arrival → _on_guide_arrived
+    #     → stage = AT_SHELF, 정지 대기
+    #     → LCD 가 GET /sshopylcd/guide/status 폴링으로 감지 → 완료 메시지 표시
+    #
+    #   end_guide(robot_id) — 사용자가 LCD '안내 종료' 클릭
+    #     → stage = TO_HOME, tryon_home(robot_id) 으로 goal_pose 발행
+    #
+    #   [홈 도착] _on_guide_arrived stage == TO_HOME
+    #     → _finish_guide_task, state 초기화 → 시나리오 종료
+
+    def start_guide(
+        self,
+        robot_id: str,
+        shoe_id: str,
+        shoe_name: str = "",
+    ) -> tuple[bool, str, Optional[str]]:
+        """
+        역할: 안내 시나리오 시작 — SShopy LCD 의 POST /sshopylcd/guide/start 에서 호출.
+        입력: robot_id, shoe_id (필수), shoe_name (선택, 로그/표시용)
+        동작 흐름:
+            1. 로봇 타입(pinky)·연결·idle 검증
+            2. task_id (GDE-####) 발급, GuideTask 생성, dict 저장
+            3. state.guide_* 필드 세팅
+            4. GUIDE_DEMO_TARGET 으로 goal_pose 발행 (실로봇 테스트 시 좌표 교체)
+        출력: (성공여부, 메시지, task_id|None)
+        """
+        state = self._states.get(robot_id)
+        if not state or state.type != "pinky":
+            return False, f"{robot_id}는 pinky 타입이 아님", None
+        if not state.connected:
+            return False, f"{robot_id} 연결 안 됨", None
+        if not self._is_robot_idle(state):
+            return False, f"{robot_id} 이미 작업 중", None
+
+        # task record 생성
+        with self._guide_lock:
+            self._guide_counter += 1
+            task_id = f"GDE-{self._guide_counter:04d}"
+            task = GuideTask(
+                task_id=task_id, robot_id=robot_id,
+                stage=GUIDE_STAGE_TO_SHELF,
+                shoe_id=shoe_id, shoe_name=shoe_name,
+            )
+            self._guide_tasks[task_id] = task
+
+        # state 초기화
+        state.guide_stage     = GUIDE_STAGE_TO_SHELF
+        state.guide_task_id   = task_id
+        state.guide_shoe_id   = shoe_id
+        state.guide_shoe_name = shoe_name
+        state._last_arrival_time = time.time()  # 즉시 도착 트리거 방지
+
+        # TODO(실로봇테스트): shoe_id 별 진열대 좌표 lookup 으로 교체.
+        # 현재는 GUIDE_DEMO_TARGET 한 곳만 사용 (data type=PoseStamped 검증용).
+        wp = GUIDE_DEMO_TARGET
+        ok = self.goal_pose(robot_id, wp["x"], wp["y"], wp["theta"])
+        self._log(
+            robot_id,
+            f"(안내) 시작 {task_id} → 진열대 (shoe={shoe_id}, name={shoe_name})"
+        )
+        return ok, "ok", task_id
+
+    def end_guide(self, robot_id: str) -> tuple[bool, str]:
+        """
+        역할: 사용자가 LCD '안내 종료' 버튼을 누를 때 호출 — 홈 복귀 명령.
+        입력: robot_id
+        동작 흐름:
+            1. guide_stage == AT_SHELF 검증 (진열대 도착 상태에서만 허용)
+            2. stage = TO_HOME 으로 전환
+            3. tryon_home(robot_id) 좌표로 goal_pose 발행
+        출력: (True, "ok") 또는 (False, 오류 메시지)
+        """
+        state = self._states.get(robot_id)
+        if not state:
+            return False, f"{robot_id} 없음"
+        if state.guide_stage != GUIDE_STAGE_AT_SHELF:
+            return False, (
+                f"{robot_id} 진열대 도착 대기 상태가 아님 "
+                f"(stage={state.guide_stage})"
+            )
+
+        self._set_guide_stage(state, GUIDE_STAGE_TO_HOME)
+        state._last_arrival_time = time.time()
+        wp = tryon_home(state.robot_id)
+        ok = self.goal_pose(state.robot_id, wp["x"], wp["y"], wp["theta"])
+        print(f"[fleet] {robot_id} (안내) 종료 → 홈 복귀")
+        return ok, "ok"
+
+    def cancel_guide(self, robot_id: str) -> bool:
+        """안내 시나리오 강제 중단 — 도중 취소 시 사용."""
+        state = self._states.get(robot_id)
+        if not state or state.guide_stage is None:
+            return False
+        self._finish_guide_task(state, error="취소")
+        state.guide_stage     = None
+        state.guide_shoe_id   = None
+        state.guide_shoe_name = None
+        if state.pose:
+            self.goal_pose(robot_id, state.pose["x"], state.pose["y"], 0.0)
+        self.cmd_vel(robot_id, 0.0, 0.0)
+        print(f"[fleet] {robot_id} 안내 시나리오 강제 중단")
+        return True
+
+    def _guide_target(self, state: _RobotState) -> Optional[dict]:
+        """현재 안내 stage 의 목표 웨이포인트. AT_SHELF 는 대기 상태(None)."""
+        s = state.guide_stage
+        if s == GUIDE_STAGE_TO_SHELF:
+            return GUIDE_DEMO_TARGET  # TODO(실로봇테스트): shoe_id 별 좌표로 교체
+        if s == GUIDE_STAGE_TO_HOME:
+            return tryon_home(state.robot_id)
+        return None  # AT_SHELF: 도착 판정 X
+
+    def _on_guide_arrived(self, state: _RobotState):
+        """안내 시나리오 도착 핸들러 — stage 별 후속 처리."""
+        robot_id = state.robot_id
+        s = state.guide_stage
+
+        if s == GUIDE_STAGE_TO_SHELF:
+            # 진열대 도착 → AT_SHELF 로 전환, LCD polling 으로 감지하여 안내 완료 표시
+            self._set_guide_stage(state, GUIDE_STAGE_AT_SHELF)
+            print(f"[fleet] {robot_id} (안내) 진열대 도착 — LCD 안내 종료 대기")
+
+        elif s == GUIDE_STAGE_TO_HOME:
+            # 홈 도착 → 시나리오 종료
+            self._finish_guide_task(state)
+            state.guide_stage     = None
+            state.guide_shoe_id   = None
+            state.guide_shoe_name = None
+            print(f"[fleet] {robot_id} (안내) 홈 복귀 완료 — 시나리오 종료")
+
+    # ── [sshopylcd연동] 안내 task 조회 ───────────────────────────────────────
+    def get_guide_status(self, task_id: str) -> Optional[dict]:
+        task = self._guide_tasks.get(task_id)
+        return task.to_dict() if task else None
+
+    def get_active_guide(self, robot_id: str) -> Optional[dict]:
+        """robot_id 의 현재 진행 중인 안내 task — LCD polling 이 사용."""
+        state = self._states.get(robot_id)
+        if not state or not state.guide_task_id:
+            return None
+        return self.get_guide_status(state.guide_task_id)
+
+    def get_all_guide_tasks(self) -> list:
+        return [t.to_dict() for t in self._guide_tasks.values()]
+
     # ── [Scene 1] 입고 시나리오 ───────────────────────────────────────────────
 
     def _is_robot_idle(self, state: _RobotState) -> bool:
@@ -1236,7 +1523,8 @@ class RobotManager:
             state.tryon_stage       is None and
             state.inbound_stage     is None and
             state.retrieval_stage   is None and
-            state.inbound_demo_stage is None
+            state.inbound_demo_stage is None and
+            state.guide_stage        is None   # [sshopylcd연동]
         )
 
     def _assign_inbound_robot(self, preferred_id: Optional[str] = None) -> Optional[str]:
@@ -1443,7 +1731,8 @@ class RobotManager:
         출력: 없음 (SSH 실패 시에도 다음 단계로 진행, 재시도 로직 TODO)
         """
         print(f"[fleet] (입고) {task.task_id} FrontJet 상차 작업 중 (박스 2개)...")
-        ok = self._ssh_exec("front_jet", self._SCRIPTS["inbound_load"])
+        # /front_jet/trigger_work 발행 → /front_jet/work_complete 수신까지 블로킹
+        ok = self._trigger_work_blocking("front_jet", task.robot_id)
         print(f"[fleet] (입고) {task.task_id} FrontJet 상차 {'완료' if ok else '실패(계속)'}")
 
         # [1-07] 상차 완료 → SShopy 창고로 이동
@@ -1806,7 +2095,8 @@ class RobotManager:
         출력: 없음 (SSH 실패 시에도 IDENTIFY 단계로 진행, 재시도 로직 TODO)
         """
         print(f"[fleet] (회수) {task.task_id} FrontJet 상차 작업 중...")
-        ok = self._ssh_exec("front_jet", self._SCRIPTS["retrieval_load"])
+        # /front_jet/trigger_work 발행 → /front_jet/work_complete 수신까지 블로킹
+        ok = self._trigger_work_blocking("front_jet", task.robot_id)
         print(f"[fleet] (회수) {task.task_id} FrontJet 상차 {'완료' if ok else '실패(계속)'}")
         # [4-09] 상품 식별 대기 단계로 전환 — identify_product() 호출 대기
         self._advance_retrieval_stage(task, RETRIEVAL_STAGE_IDENTIFY)
@@ -2015,6 +2305,35 @@ class RobotManager:
         pub = self._get_pub(robot_id, f"/{ns}/trigger_work", "std_msgs/String", client)
         pub.publish(roslibpy.Message({"data": sshopy_id}))
         state.busy = True
+        return True
+
+    def _trigger_work_blocking(self, robot_id: str, sshopy_id: str,
+                               timeout: float = 60.0) -> bool:
+        """
+        역할: trigger_work() 발행 → /{ns}/work_complete 수신까지 블로킹 대기.
+        입력: robot_id(=front_jet|ware_jet), sshopy_id(=대상 sshopy ID), timeout(초)
+        동작 흐름:
+            1. state._work_complete_event.clear()
+            2. trigger_work() 발행 (실패 시 False 즉시 반환)
+            3. event.wait(timeout) — _on_work_complete()가 set() 호출 시 깨어남
+            4. timeout 도달 시 False 반환
+        출력: True(work_complete 수신) 또는 False(발행 실패/타임아웃)
+        """
+        state = self._states.get(robot_id)
+        if not state:
+            print(f"[fleet] {robot_id} _trigger_work_blocking: state 없음")
+            return False
+        state._work_complete_event.clear()
+        if not self.trigger_work(robot_id, sshopy_id):
+            print(f"[fleet] {robot_id} trigger_work 발행 실패 (rosbridge 미연결?)")
+            return False
+        print(f"[fleet] {robot_id} trigger_work 발행 → work_complete 대기 "
+              f"(sshopy={sshopy_id}, timeout={timeout}s)")
+        ok = state._work_complete_event.wait(timeout=timeout)
+        if not ok:
+            print(f"[fleet] {robot_id} work_complete 타임아웃 ({timeout}s)")
+            return False
+        print(f"[fleet] {robot_id} work_complete 수신: data={state.last_work_complete!r}")
         return True
 
     # ── Jetcobot 스크립트 경로 (각 jetcobot의 ~/scripts/ 에 배치됨) ──

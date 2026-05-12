@@ -149,10 +149,10 @@ def _run_pipeline(img: np.ndarray) -> dict:
         cv2.circle(result_img, (int(cx), int(cy)), 7, (0, 0, 255), -1)
 
         _put_text_bg(filter_img,
-                     f"OK  S={solidity:.2f}  A={aspect:.2f}  w={w:.0f} h={h:.0f}",
+                     f"cx={cx:.0f} cy={cy:.0f}  S={solidity:.2f}  A={aspect:.2f}  w={w:.0f} h={h:.0f}",
                      (int(cx) + 6, int(cy) - 10), 0.65, (0, 255, 0))
         _put_text_bg(result_img,
-                     f"w={w:.0f} h={h:.0f}  S={solidity:.2f}  A={aspect:.2f}",
+                     f"cx={cx:.0f} cy={cy:.0f}  w={w:.0f} h={h:.0f}",
                      (int(cx) + 6, int(cy) - 10), 0.65, (0, 255, 180))
 
         detections.append({"cx": cx, "cy": cy, "w": w, "h": h,

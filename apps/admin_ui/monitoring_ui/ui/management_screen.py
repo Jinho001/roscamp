@@ -254,13 +254,39 @@ class ManagementScreen(QWidget):
 
         self._grid = QGridLayout()
         self._grid.setSpacing(8)
+        # [seat-layout-map-match] 4-col 그리드 — 입구(col 0) + 진열대(상)(col 1-3 span)
+        # 좌석은 2칸씩 span(좌우 대칭), 진열대(하)는 col 0-3 전체 span
+        self._lbl_entrance = QLabel("입구")
+        self._lbl_entrance.setAlignment(Qt.AlignCenter)
+        self._lbl_shelf_top = QLabel("진열대")
+        self._lbl_shelf_top.setAlignment(Qt.AlignCenter)
+        self._lbl_shelf_bottom = QLabel("진열대")
+        self._lbl_shelf_bottom.setAlignment(Qt.AlignCenter)
+        self._layout_labels = [
+            self._lbl_entrance, self._lbl_shelf_top, self._lbl_shelf_bottom,
+        ]
+        self._grid.addWidget(self._lbl_entrance,     0, 0)
+        self._grid.addWidget(self._lbl_shelf_top,    0, 1, 1, 3)
+        self._grid.addWidget(self._lbl_shelf_bottom, 3, 0, 1, 4)
+        # [seat-layout-map-match] 좌석 2칸씩 span — 위쪽(진열대 측): 4 3 / 아래쪽(입구 측): 1 2
+        _seat_positions = {
+            1: (2, 0, 1, 2), 2: (2, 2, 1, 2),
+            3: (1, 2, 1, 2), 4: (1, 0, 1, 2),
+        }
         for seat_id in range(1, 5):
-            col = (seat_id - 1) % 2
-            row = (seat_id - 1) // 2
+            row, col, rspan, cspan = _seat_positions[seat_id]
             # [실로봇연동] 표시 전용 위젯 — kiosk_tryon /kiosk/seat/status 폴링 결과 반영
             btn = SeatStatusWidget(seat_id)
-            self._grid.addWidget(btn, row, col)
+            # [seat-layout-map-match] 셀 내부에서 안쪽 정렬 — 좌측 좌석은 오른쪽, 우측 좌석은 왼쪽
+            seat_align = (
+                (Qt.AlignRight | Qt.AlignVCenter) if col == 0
+                else (Qt.AlignLeft | Qt.AlignVCenter)
+            )
+            self._grid.addWidget(btn, row, col, rspan, cspan, seat_align)
             self._seat_btns[seat_id] = btn
+        # [seat-layout-map-match] 4-col 균등 분배 — 입구 25%, 진열대(상) 75%, 좌석 50%씩
+        for c in range(4):
+            self._grid.setColumnStretch(c, 1)
         self._seat_lay.addLayout(self._grid)
         self._right_col.addWidget(seat_card)
 
@@ -406,6 +432,21 @@ class ManagementScreen(QWidget):
         self._grid.setSpacing(max(round(8 * s), 3))
         for btn in self._seat_btns.values():
             btn.apply_scale(s)
+        # [seat-layout-map-match] 입구/진열대 라벨 — 좌석과 구분되는 점선 보더 + 회색 톤
+        lbl_font_px = max(round(13 * s), 10)
+        lbl_pad = max(round(6 * s), 3)
+        lbl_min_h = max(round(28 * s), 18)
+        lbl_min_w = max(round(48 * s), 32)
+        lbl_style = (
+            f"QLabel {{ background:#eef1f4; color:#57606a;"
+            f"border:1px dashed #afb8c1; border-radius:4px;"
+            f"font-family:'Courier New',monospace; font-size:{lbl_font_px}px;"
+            f"font-weight:bold; padding:{lbl_pad}px; }}"
+        )
+        for lbl in self._layout_labels:
+            lbl.setStyleSheet(lbl_style)
+            lbl.setMinimumHeight(lbl_min_h)
+            lbl.setMinimumWidth(lbl_min_w)
 
         # 요청 카드
         rm2 = max(round(12 * s), 4)
