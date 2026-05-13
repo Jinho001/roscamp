@@ -19,9 +19,6 @@ kiosk_api_client.py
     # 상품 상세 (tryon)
     api.fetch_shoe_information(shoe_id="NK-AF1", callback=lambda data: ...)
 
-    # 좌석 현황 (tryon)
-    api.fetch_seat_status(callback=lambda data: ...)
-
 콜백은 항상 메인 스레드에서 실행된다 (QMetaObject.invokeMethod 사용).
 실패 시 콜백에 None이 전달된다.
 
@@ -30,7 +27,9 @@ kiosk_api_client.py
     POST /find_shoe?data={"shoe_id":"..."}      → (내부 사용)
     POST /search    body={keyword, accumulated_tags}  → search()
     POST /find_shoe_information?data={"shoe_id":"..."} → fetch_shoe_information()
-    GET  /kiosk/seat/status                    → fetch_seat_status()
+
+[좌석환경변수] fetch_seat_status / _req_seat_status / normalize_seat_status 제거 —
+좌석은 환경변수 MOOSINSA_SEAT_ID 로 고정되어 서버 조회가 불필요해짐.
 """
 
 import json
@@ -214,17 +213,7 @@ class KioskApiClient:
         """
         self._run(self._req_pickup_complete, args=(robot_id,), callback=callback)
 
-    def fetch_seat_status(self, callback: Callable[[Optional[dict]], None]):
-        """
-        시착 좌석 현황 조회.
-        GET /kiosk/seat/status
-
-        callback 인자:
-            dict — {"seats": {"1": bool, "2": bool, "3": bool, "4": bool}}
-                   True = 점유, False = 빈 자리
-            None — 실패
-        """
-        self._run(self._req_seat_status, args=(), callback=callback)
+    # [좌석환경변수] fetch_seat_status 제거 — 좌석은 환경변수로 고정됨
 
     # ════════════════════════════════════════════════════════
     # 내부: 스레드 실행
@@ -319,10 +308,7 @@ class KioskApiClient:
         shoe["inventory"] = inventory  # [상품상세재고연동] inventory 행 리스트 첨부
         return shoe
 
-    def _req_seat_status(self) -> Optional[dict]:
-        """GET /kiosk/seat/status → {"seats": {...}}"""
-        url = f"{BASE_URL}/kiosk/seat/status"
-        return self._get_json(url)
+    # [좌석환경변수] _req_seat_status 제거 — 좌석은 환경변수로 고정됨
 
     def _req_stock_check(self, shoe_id: str, color: str, size: str) -> Optional[dict]:
         """[시착요청연동] POST /kiosk/stock/check → {"in_stock": bool, "stock": int}"""
@@ -587,12 +573,4 @@ def normalize_shoe_for_tryon(raw: dict) -> dict:
     }
 
 
-def normalize_seat_status(raw: dict) -> dict:
-    """
-    /kiosk/seat/status 응답 → TryonPage SEAT_STATUS 형식으로 변환.
-
-    입력:  {"seats": {"1": true, "2": false, ...}}
-    반환:  {"1": True, "2": False, ...}
-    """
-    seats = raw.get("seats", {})
-    return {str(k): bool(v) for k, v in seats.items()}
+# [좌석환경변수] normalize_seat_status 제거 — 좌석은 환경변수로 고정됨

@@ -2,10 +2,11 @@
 moosinsa_tryon.py
 - 상품 이미지/이름/가격 표시
 - 색상·사이즈 재고 연동 버튼 (활성/비활성)
-- 시착 좌석 선택 맵 (배경 이미지 교체 가능, 실시간 점유 상태)
-- 미선택/점유 오류 팝업
+- 시착 좌석 안내 (MOOSINSA_SEAT_ID 환경변수)  # [좌석환경변수]
+- 미선택 오류 팝업
 - 시착 요청 버튼
 """
+import os                                                   # [좌석환경변수]
 import sys
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -30,9 +31,7 @@ C_BROWN_H  = "#6E5A48"
 C_BORDER   = "#D6D1C9"
 C_SUB      = "#999999"
 C_DISABLED = "#C8C4BE"
-C_OCCUPIED = "#C0392B"   # 점유 좌석
-C_AVAIL    = C_FOREST    # 빈 좌석
-C_SELECTED = C_DARK      # 선택된 좌석
+# [좌석환경변수] 좌석 맵 색상 상수 제거 — 안내 라벨로 단순화됨
 
 # ── SVG ──────────────────────────────────────────────────────
 SVG_HOME = """<svg viewBox="0 0 32 32" fill="none"
@@ -161,17 +160,7 @@ def _safe_product_for_tryon(product: dict) -> dict:
     }
 
 
-# 좌석 맵: True = 점유, False = 빈 자리
-# 실제 연동 시 이 dict를 서버에서 폴링하여 갱신
-SEAT_STATUS = {
-    "1": False, "2": True,
-    "3": False, "4": False,
-}
-# 2x2 grid
-SEAT_LAYOUT = [["1","2"],["3","4"]]
-
-# 전면대 레이블 (좌석 맵 상단/하단 표시)
-DISPLAY_LABEL = "진 열 대"
+# [좌석환경변수] 좌석 맵 데이터 제거 — 키오스크는 자신의 좌석 번호만 안내
 
 
 # ════════════════════════════════════════════════════════════
@@ -330,149 +319,52 @@ class OptionChip(QPushButton):
                     f"QPushButton:hover{{border:1.5px solid {C_DARK};}}")
 
 
+# [좌석환경변수] SeatMap 위젯 제거 — 좌석은 환경변수 MOOSINSA_SEAT_ID로 고정,
+# 안내 라벨(SeatInfoLabel)로 대체
+
+
 # ════════════════════════════════════════════════════════════
-#  Seat map widget
+#  Seat info label widget  # [좌석환경변수]
 # ════════════════════════════════════════════════════════════
-class SeatMap(QFrame):
+class SeatInfoLabel(QFrame):
     """
-    배경 이미지 위에 좌석 버튼을 오버레이.
-    set_map_image(path) 로 배경 교체 가능.
-    set_seat_status(dict) 로 실시간 점유 상태 갱신.
+    [좌석환경변수] 키오스크가 배치된 좌석 번호를 안내하는 라벨.
+    환경변수 MOOSINSA_SEAT_ID 로부터 받은 좌석 번호를 강조 표시한다.
     """
-    def __init__(self, seat_status: dict, on_select, parent=None):
+    def __init__(self, seat_id: int, parent=None):
         super().__init__(parent)
-        self._status    = dict(seat_status)
-        self._on_select = on_select
-        self._selected  = None
-        self._seat_btns: dict[str, QPushButton] = {}
-        self._map_pixmap: QPixmap | None = None
-        self._s         = 0.5
+        self._seat_id = int(seat_id)
+        self._s = 0.5
 
         self.setStyleSheet(
             f"QFrame{{background:{C_BG};"
             f"border:1px solid {C_BORDER};border-radius:12px;}}")
-        self._build()
 
-    def set_map_image(self, path: str):
-        """배경 맵 이미지 교체. PNG/JPG 경로."""
-        self._map_pixmap = QPixmap(path)
-        self.update()
+        lo = QVBoxLayout(self)
+        lo.setAlignment(Qt.AlignCenter)
 
-    def set_seat_status(self, status: dict):
-        """실시간 좌석 점유 상태 갱신."""
-        self._status = dict(status)
-        if self._selected and self._status.get(self._selected, False):
-            self._selected = None
-            self._on_select(None)
-        self._restyle_seats(self._s)
-
-    def selected_seat(self) -> str | None:
-        return self._selected
-
-    def _build(self):
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        # 상단 진열대 레이블
-        self._top_lbl = QLabel(DISPLAY_LABEL)
-        self._top_lbl.setAlignment(Qt.AlignCenter)
-        outer.addWidget(self._top_lbl)
-
-        # 좌석 그리드 (입구/통로 표시 포함)
-        self._grid_frame = QFrame()
-        self._grid_frame.setStyleSheet("background:transparent;border:none;")
-        self._grid_lo = QGridLayout(self._grid_frame)
-        self._grid_lo.setAlignment(Qt.AlignCenter)
-
-        # 좌석 버튼 배치 (2x2)
-        for ri, row in enumerate(SEAT_LAYOUT):
-            for ci, seat_id in enumerate(row):
-                btn = QPushButton(seat_id)
-                btn.setCursor(Qt.PointingHandCursor)
-                btn.setCheckable(True)
-                btn.clicked.connect(
-                    lambda checked=False, sid=seat_id: self._seat_clicked(sid))
-                self._seat_btns[seat_id] = btn
-                self._grid_lo.addWidget(btn, ri, ci + 1)
-
-        outer.addWidget(self._grid_frame, stretch=1)
-
-        # 하단 진열대 레이블
-        self._bot_lbl = QLabel(DISPLAY_LABEL)
-        self._bot_lbl.setAlignment(Qt.AlignCenter)
-        outer.addWidget(self._bot_lbl)
-
-    def _seat_clicked(self, seat_id: str):
-        if self._status.get(seat_id, False):
-            # 점유 중 → 선택 불가
-            self._seat_btns[seat_id].setChecked(False)
-            return
-        # 이전 선택 해제
-        if self._selected and self._selected != seat_id:
-            self._seat_btns[self._selected].setChecked(False)
-        self._selected = seat_id if self._seat_btns[seat_id].isChecked() else None
-        self._on_select(self._selected)
-        self._restyle_seats(self._s)
-
-    def _restyle_seats(self, s):
-        r   = max(round(14 * s), 5)
-        sz  = max(round(110 * s), 38)
-        fs  = max(round(22 * s), 8)
-        for sid, btn in self._seat_btns.items():
-            occupied = self._status.get(sid, False)
-            selected = (sid == self._selected)
-            btn.setEnabled(not occupied)
-            btn.setFixedSize(sz, sz)
-            if occupied:
-                btn.setStyleSheet(
-                    f"QPushButton{{background:{C_OCCUPIED};color:#fff;"
-                    f"border:none;border-radius:{r}px;"
-                    f"font-size:{max(round(30*s),11)}px;font-weight:500;}}")
-            elif selected:
-                btn.setStyleSheet(
-                    f"QPushButton{{background:{C_DARK};color:{C_BG};"
-                    f"border:2px solid {C_DARK};border-radius:{r}px;"
-                    f"font-size:{fs}px;font-weight:600;}}")
-            else:
-                btn.setStyleSheet(
-                    f"QPushButton{{background:{C_FOREST};color:{C_FOREST_T};"
-                    f"border:none;border-radius:{r}px;"
-                    f"font-size:{fs}px;font-weight:400;}}"
-                    f"QPushButton:hover{{background:#364D3A;}}")
+        self._msg_lbl = QLabel(
+            f"현재 고객님께서 사용 중인 좌석은\n"
+            f"<b>{self._seat_id}번 좌석</b>입니다"
+        )
+        self._msg_lbl.setAlignment(Qt.AlignCenter)
+        self._msg_lbl.setTextFormat(Qt.RichText)
+        lo.addWidget(self._msg_lbl)
 
     def apply_scale(self, s):
         self._s = s
         hm = max(round(20 * s), 7)
         vm = max(round(16 * s), 5)
         self.layout().setContentsMargins(hm, vm, hm, vm)
-        self.layout().setSpacing(max(round(10 * s), 3))
-        self._grid_lo.setSpacing(max(round(10 * s), 3))
         self.setStyleSheet(
             f"QFrame{{background:{C_BG};"
             f"border:1px solid {C_BORDER};"
             f"border-radius:{max(round(16*s),6)}px;}}")
-
-        fs_lbl = max(round(22 * s), 8)
-        for lbl in (self._top_lbl, self._bot_lbl):
-            lbl.setFixedHeight(max(round(44 * s), 16))
-            lbl.setStyleSheet(
-                f"color:{C_SUB};font-size:{fs_lbl}px;"
-                f"font-family:'Helvetica Neue',Arial;font-weight:300;"
-                f"letter-spacing:{max(round(4*s),1)}px;background:transparent;border:none;")
-
-        self._restyle_seats(s)
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self._map_pixmap and not self._map_pixmap.isNull():
-            painter = QPainter(self)
-            painter.setOpacity(0.18)
-            scaled = self._map_pixmap.scaled(
-                self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            x = (self.width()  - scaled.width())  // 2
-            y = (self.height() - scaled.height()) // 2
-            painter.drawPixmap(x, y, scaled)
+        self._msg_lbl.setStyleSheet(
+            f"color:{C_DARK};font-size:{max(round(30*s),11)}px;"
+            f"font-family:'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif;"
+            f"font-weight:400;background:transparent;border:none;"
+            f"line-height:140%;")
 
 
 # ════════════════════════════════════════════════════════════
@@ -531,7 +423,7 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
     def __init__(
         self,
         product: dict = None,
-        seat_status: dict = None,
+        seat_status: dict = None,  # [좌석환경변수] 인자 유지(외부 호환) — 내부 사용 없음
         on_home=None,
         on_back=None,
         on_tryon_request=None,
@@ -540,7 +432,6 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
         super().__init__()
 
         self._product    = product      or MOCK_PRODUCT
-        self._seats      = seat_status  or SEAT_STATUS
         self._on_home    = on_home      or (lambda: None)
         self._on_back    = on_back      or (lambda: None)
         self._on_request = on_tryon_request or (
@@ -548,9 +439,12 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
         self._api        = api_client   # KioskApiClient 인스턴스 (None이면 MOCK 사용)
         self._s          = 0.5
 
+        # [좌석환경변수] 환경변수에서 좌석 번호 로드 — 진입점(kiosk_home)에서 이미 검증됨.
+        # 직접 실행(__main__) 시에도 동작하도록 기본값 1 사용.
+        self._seat_id    = int(os.environ.get("MOOSINSA_SEAT_ID", "1"))
+
         self._sel_color  = None
         self._sel_size   = None
-        self._sel_seat   = None
 
         self.setStyleSheet(f"background:{C_BG};")  # ★ CHANGED ★
         self._root = QVBoxLayout(self)             # ★ CHANGED ★
@@ -668,10 +562,10 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
         self._size_section.layout().addLayout(self._size_chip_lo)
         lo.addWidget(self._size_section)
 
-        # ── 시착 좌석 선택 ─────────────────────────────────
-        self._seat_section = self._make_section("시 착 좌 석 선 택")
-        self._seat_map = SeatMap(self._seats, self._seat_selected)
-        self._seat_section.layout().addWidget(self._seat_map)
+        # ── 시착 좌석 안내 ─────────────────────────────────  # [좌석환경변수]
+        self._seat_section = self._make_section("시 착 좌 석 안 내")
+        self._seat_info = SeatInfoLabel(self._seat_id)
+        self._seat_section.layout().addWidget(self._seat_info)
         lo.addWidget(self._seat_section)
 
         lo.addStretch()
@@ -691,40 +585,34 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
         PageManager가 상품 클릭 시 호출.
         product에 shoe_id가 있으면 API에서 색상/사이즈/재고를 조회한 뒤 빌드.
         shoe_id가 없거나 API 미설정이면 전달받은 product 그대로 사용.
+
+        [좌석환경변수] seat_status 인자는 외부 호출 호환을 위해 남겨두지만 사용하지 않는다.
+        좌석은 시작 시 환경변수(MOOSINSA_SEAT_ID)로 고정된다.
         """
         # [상품정보연동] category_brand에서 넘어온 product는 포맷이 달라 _build_content()
         # 에서 c["label"] 등 접근 시 TypeError가 발생할 수 있음 → 변환 후 렌더
         self._product = _safe_product_for_tryon(product)
-        if seat_status:
-            self._seats = seat_status
         self._sel_color = None
         self._sel_size  = None
-        self._sel_seat  = None
         self._rebuild_content()
 
         shoe_id = product.get("shoe_id", "")
         if self._api and shoe_id:
             # [상품상세재고연동] API에서 이름/가격/재고 모두 조회 후 갱신
-            from kiosk_api_client import normalize_shoe_for_tryon, normalize_seat_status
+            from kiosk_api_client import normalize_shoe_for_tryon
             def _on_shoe(data):
                 if data:
                     self._product = normalize_shoe_for_tryon(data)
                     self._sel_color = None
                     self._sel_size  = None
                     self._rebuild_content()
-            def _on_seat(data):
-                if data:
-                    self._seats = normalize_seat_status(data)
-                    self._sel_seat = None
-                    self._rebuild_content()
             self._api.fetch_shoe_full(shoe_id, callback=_on_shoe)  # [상품상세재고연동]
-            self._api.fetch_seat_status(callback=_on_seat)
+            # [좌석환경변수] fetch_seat_status 호출 제거 — 좌석은 환경변수로 고정
 
     def _rebuild_content(self):
         """content 위젯 초기화 후 재빌드."""
         self._sel_color = None
         self._sel_size  = None
-        self._sel_seat  = None
         while self._content_lo.count():
             item = self._content_lo.takeAt(0)
             if item.widget():
@@ -752,9 +640,7 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
             self._sel_color = None
         self._update_request_btn()
 
-    def _seat_selected(self, seat_id):
-        self._sel_seat = seat_id
-        self._update_request_btn()
+    # [좌석환경변수] _seat_selected 콜백 제거 — 좌석은 환경변수로 고정
 
     def _update_request_btn(self):
         self._apply_request_btn_style(self._s)
@@ -770,19 +656,13 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
             f"QPushButton:hover{{background:#2E2E2E;}}") 
 
     def _on_request_clicked(self):
+        # [좌석환경변수] 좌석 검증 제거 — 좌석은 환경변수로 고정되므로
+        # color/size 미선택만 검사한다.
         missing = []
         if not self._sel_color:
             missing.append("색상")
         if not self._sel_size:
             missing.append("사이즈")
-        if not self._sel_seat:
-            missing.append("시착 좌석")
-        elif self._seats.get(self._sel_seat, False):
-            dlg = ErrorDialog(
-                f"선택하신 좌석({self._sel_seat})은\n현재 사용 중입니다.\n다른 좌석을 선택해 주세요.",
-                self._s, self)
-            dlg.exec()
-            return
 
         if missing:
             items = ", ".join(missing)
@@ -791,12 +671,18 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
             dlg.exec()
             return
 
+        # [좌석환경변수] seat 값은 환경변수에서 고정 — 문자열로 통일(기존 흐름 유지)
+        # [상품정보전달] tryon_delivery/arrive/another 페이지에서 상품 이미지·브랜드·가격을
+        # 표시할 수 있도록 selection에 함께 담는다 (기존엔 name/shoe_id만 전달되어 누락).
         selection = {
-            "product":  self._product["name"],
-            "shoe_id":  self._product.get("shoe_id", ""),
-            "color":    self._sel_color,
-            "size":     self._sel_size,
-            "seat":     self._sel_seat,
+            "product":   self._product["name"],
+            "shoe_id":   self._product.get("shoe_id", ""),
+            "brand":     self._product.get("brand", ""),         # [상품정보전달]
+            "price":     self._product.get("price", 0),          # [상품정보전달]
+            "image_url": self._product.get("image_url", None),   # [상품정보전달]
+            "color":     self._sel_color,
+            "size":      self._sel_size,
+            "seat":      str(self._seat_id),
         }
 
         shoe_id = selection["shoe_id"]
@@ -804,11 +690,7 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
             # [시착요청연동] 버튼 비활성화 (중복 클릭 방지)
             self._request_btn.setEnabled(False)
 
-            # [좌석실시간검증] 클릭 시점의 선택 좌석 ID를 별도 보관
-            # (set_seat_status 호출 시 self._sel_seat 가 리셋될 수 있음)
-            requested_seat = self._sel_seat
-
-            # [시착요청연동] STEP 2: DB 재고 확인
+            # [시착요청연동] STEP 1: DB 재고 확인  # [좌석환경변수] 좌석 재조회 단계 제거
             def _on_stock(data):
                 if data is None:
                     self._request_btn.setEnabled(True)
@@ -826,7 +708,7 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
                     dlg.exec()
                     return
 
-                # [시착요청연동] STEP 3: 로봇 시착 요청
+                # [시착요청연동] STEP 2: 로봇 시착 요청
                 def _on_tryon(resp):
                     self._request_btn.setEnabled(True)
                     if resp is None:
@@ -850,49 +732,17 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
                     shoe_id=shoe_id,
                     color=self._sel_color,
                     size=self._sel_size,
-                    seat_id=int(self._sel_seat),
+                    seat_id=self._seat_id,  # [좌석환경변수] 환경변수에서 가져온 정수 좌석
                     robot_id=None,
                     callback=_on_tryon,
                 )
 
-            # [좌석실시간검증] STEP 1: 시착 요청 직전 좌석 점유 재조회.
-            # 캐시된 self._seats 와 실제 서버 상태가 어긋날 수 있어,
-            # 요청 직전에 한 번 더 확인하고 UI 도 같이 갱신한다.
-            def _on_seat_recheck(data):
-                from kiosk_api_client import normalize_seat_status
-                if data is None:
-                    self._request_btn.setEnabled(True)
-                    dlg = ErrorDialog(
-                        "서버와 통신에 실패했습니다.\n잠시 후 다시 시도해 주세요.",
-                        self._s, self)
-                    dlg.exec()
-                    return
-
-                # 최신 좌석 상태로 UI 갱신. set_seat_status 내부에서
-                # 점유로 바뀐 좌석이면 선택 자동 해제.
-                self._seats = normalize_seat_status(data)
-                self._seat_map.set_seat_status(self._seats)
-
-                # 요청 좌석이 그 사이 점유로 변경된 경우 → 반려
-                if self._seats.get(requested_seat, False):
-                    self._request_btn.setEnabled(True)
-                    dlg = ErrorDialog(
-                        f"선택하신 좌석({requested_seat})을\n"
-                        "방금 다른 고객님이 사용 요청하셨습니다.\n"
-                        "다른 좌석을 선택해 주세요.",
-                        self._s, self)
-                    dlg.exec()
-                    return
-
-                # 검증 통과 → 기존 재고 확인 단계로 진행
-                self._api.check_stock(
-                    shoe_id=shoe_id,
-                    color=self._sel_color,
-                    size=self._sel_size,
-                    callback=_on_stock,
-                )
-
-            self._api.fetch_seat_status(callback=_on_seat_recheck)
+            self._api.check_stock(
+                shoe_id=shoe_id,
+                color=self._sel_color,
+                size=self._sel_size,
+                callback=_on_stock,
+            )
         else:
             # API 없음 (mock 모드) — 재고 확인 없이 바로 진행
             selection["robot_id"] = "sshopy2"
@@ -954,10 +804,10 @@ class TryonPage(QWidget):                     # ★ CHANGED: QMainWindow → QWi
         for chip in self._color_chips + self._size_chips:
             chip.apply_scale(s)
 
-        # 좌석 맵
-        map_h = max(round(340 * s), 120)
-        self._seat_map.setFixedHeight(map_h)
-        self._seat_map.apply_scale(s)
+        # 좌석 안내 라벨  # [좌석환경변수]
+        info_h = max(round(180 * s), 64)
+        self._seat_info.setFixedHeight(info_h)
+        self._seat_info.apply_scale(s)
 
         # 시착 버튼
         self._apply_request_btn_style(s)
@@ -975,9 +825,9 @@ if __name__ == "__main__":
         print(f"  사이즈: {sel['size']}")
         print(f"  좌석: {sel['seat']}")
 
+    # [좌석환경변수] 단독 실행 시 좌석 환경변수가 없으면 기본 1로 동작
     win = TryonPage(
         product=MOCK_PRODUCT,
-        seat_status=SEAT_STATUS,
         on_home=lambda: print("→ Home"),
         on_back=lambda: print("→ Back"),     # ★ CHANGED ★
         on_tryon_request=on_request,
