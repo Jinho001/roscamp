@@ -1099,12 +1099,19 @@ class RobotManager:
                 state.vision_goal = None
                 return
             if (now - state.vision_goal_sent_time) > VISION_BUSY_TIMEOUT:
-                print(
-                    f"[fleet] {state.robot_id} (vision) timeout — vision_busy 강제 해제 "
-                    f"({VISION_BUSY_TIMEOUT:.0f}s 경과)"
-                )
                 state.vision_busy = False
                 state.vision_goal = None
+                # [sshopy3-guide-vision-mutex] timeout 시에도 진행 중 Nav2 goal 취소
+                # cancel_tryon 패턴 — 현재 pose 재발행 + cmd_vel(0,0) 정지
+                if state.pose:
+                    self.goal_pose(
+                        state.robot_id, state.pose["x"], state.pose["y"], 0.0
+                    )
+                self.cmd_vel(state.robot_id, 0.0, 0.0)
+                print(
+                    f"[fleet] {state.robot_id} (vision) timeout — vision_busy 강제 해제 + 정지 "
+                    f"({VISION_BUSY_TIMEOUT:.0f}s 경과)"
+                )
             return
 
     def _tryon_target(self, state: _RobotState) -> dict | None:
@@ -2298,6 +2305,7 @@ class RobotManager:
         [sshopy3-guide-vision-mutex] vision_busy를 조건부로 해제.
         vision_busy=True 이고 마지막 vision goal 발행 후 threshold_sec 초 지났으면 해제한다.
         용도: handle_result에서 빈 goal(손 내림)이 지속될 때 vision 점유를 신속히 풀기 위함.
+        해제 시 진행 중인 Nav2 goal도 함께 취소한다 (cancel_tryon 패턴 동일).
         출력: True(해제 수행) / False(해제 안 함 — busy 아니거나 시간 미달)
         """
         state = self._states.get(robot_id)
@@ -2307,9 +2315,14 @@ class RobotManager:
             return False
         state.vision_busy = False
         state.vision_goal = None
+        # [sshopy3-guide-vision-mutex] 진행 중 Nav2 goal 취소 — cancel_tryon 패턴
+        # 손 내림 후에도 sshopy가 손든 사람 좌표로 계속 이동하던 문제 해결.
+        if state.pose:
+            self.goal_pose(robot_id, state.pose["x"], state.pose["y"], 0.0)
+        self.cmd_vel(robot_id, 0.0, 0.0)
         print(
             f"[fleet] {robot_id} (vision) 빈 goal {threshold_sec:.0f}s 지속 → "
-            f"vision_busy 해제"
+            f"vision_busy 해제 + 정지"
         )
         return True
 
