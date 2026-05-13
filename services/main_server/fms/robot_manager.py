@@ -53,7 +53,7 @@ ARRIVAL_COOLDOWN  = 5.0   # 같은 웨이포인트 중복 트리거 방지 (초)
 # [sshopy3-guide-vision-mutex] vision(손-감지) 점유 강제 해제 timeout (초)
 # Nav2 SUCCEEDED 또는 거리 도착이 감지 안 되어도 이 시간이 지나면 vision_busy를 풀어
 # 다른 시나리오(특히 guide) 진입을 허용한다. 거리 미달로 stuck 되는 케이스 fail-safe.
-VISION_BUSY_TIMEOUT = 10.0
+VISION_BUSY_TIMEOUT = 5.0
 
 
 # ── 시착 시나리오 (Scene 2) 웨이포인트 ─────────────────────────────────────────
@@ -2291,6 +2291,26 @@ class RobotManager:
             "linear":  {"x": linear_x, "y": 0.0, "z": 0.0},
             "angular": {"x": 0.0,      "y": 0.0, "z": angular_z},
         }))
+        return True
+
+    def release_vision_busy_if_stale(self, robot_id: str, threshold_sec: float) -> bool:
+        """
+        [sshopy3-guide-vision-mutex] vision_busy를 조건부로 해제.
+        vision_busy=True 이고 마지막 vision goal 발행 후 threshold_sec 초 지났으면 해제한다.
+        용도: handle_result에서 빈 goal(손 내림)이 지속될 때 vision 점유를 신속히 풀기 위함.
+        출력: True(해제 수행) / False(해제 안 함 — busy 아니거나 시간 미달)
+        """
+        state = self._states.get(robot_id)
+        if state is None or not state.vision_busy:
+            return False
+        if (time.time() - state.vision_goal_sent_time) <= threshold_sec:
+            return False
+        state.vision_busy = False
+        state.vision_goal = None
+        print(
+            f"[fleet] {robot_id} (vision) 빈 goal {threshold_sec:.0f}s 지속 → "
+            f"vision_busy 해제"
+        )
         return True
 
     def try_vision_goal(self, robot_id: str, x: float, y: float,

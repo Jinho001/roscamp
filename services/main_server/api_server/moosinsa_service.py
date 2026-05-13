@@ -560,6 +560,10 @@ class VisionRobotBridge:
         goals = result.get("goals") or []
 
         if not goals:
+            # [sshopy3-guide-vision-mutex] 빈 goal 2초 지속 시 손 내림으로 간주 → vision_busy 해제
+            # 운영 환경에서 Nav2 SUCCEEDED 신호가 안 오는 경우(거리 미달로 stuck) 다른 task
+            # (특히 guide) 진입을 신속히 허용하기 위함.
+            fleet.release_vision_busy_if_stale(self.robot_id, 2.0)
             logger.info(
                 f"[VISION->PINKY] frame_id={frame_id} hand_raise goal 없음 - 명령 없음"
             )
