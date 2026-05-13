@@ -124,12 +124,6 @@ YOLO_CHUNK_SIZE    = 60000      # UDP 패킷당 최대 페이로드 크기 (byte
 # DB_PORT  = 3306
 # DB_NAME  = "MSS_DB"
 
-# ── [sshopy3-guide-vision-mutex] guide / vision(손-감지) 전용 로봇 ─────────────
-# 두 시나리오는 동일 로봇을 점유하며 서로/다른 시나리오와 상호배제된다.
-# 운영 중 다른 로봇으로 전환 시: env GUIDE_VISION_ROBOT_ID 만 변경하면 됨.
-# (Pydantic 모델 default 와 VisionRobotBridge 모두 이 값을 사용)
-GUIDE_VISION_ROBOT_ID = os.getenv("GUIDE_VISION_ROBOT_ID", "sshopy3")
-
 
 # ══════════════════════════════════════════════════════════════
 # Pydantic 요청 모델
@@ -551,8 +545,7 @@ class VisionRobotBridge:
     기존 fleet API만 사용한다.
     """
 
-    # [sshopy3-guide-vision-mutex] vision/guide 전용 로봇 ID는 모듈 상단 GUIDE_VISION_ROBOT_ID 참조
-    def __init__(self, robot_id: str = GUIDE_VISION_ROBOT_ID):
+    def __init__(self, robot_id: str = "sshopy2"):
         self.robot_id = robot_id
 
     def handle_result(self, result: dict):
@@ -577,20 +570,16 @@ class VisionRobotBridge:
                 )
                 continue
 
-            # [sshopy3-guide-vision-mutex] try_vision_goal: idle 검증 + vision_busy 마커 세팅
-            # 다른 시나리오(guide/tryon/inbound/retrieval) 진행 중이거나
-            # 직전 vision 이동이 아직 끝나지 않았다면 발행 자체를 차단한다.
-            ok, msg = fleet.try_vision_goal(
-                self.robot_id, float(x), float(y), float(theta)
-            )
+            ok = fleet.goal_pose(self.robot_id, float(x), float(y), float(theta))
             if ok:
                 logger.warning(
                     f"[VISION->PINKY] hands_up goal 전송 → robot={self.robot_id} "
                     f"x={float(x):.3f} y={float(y):.3f} theta={float(theta):.3f}"
                 )
             else:
-                logger.info(
-                    f"[VISION->PINKY] robot={self.robot_id} skip: {msg}"
+                logger.warning(
+                    f"[VISION->PINKY] robot={self.robot_id} goal_pose 실패 "
+                    f"(연결 상태 확인 필요)"
                 )
 
 
@@ -809,8 +798,9 @@ async def lifespan(app: FastAPI):
     logger.info("LLM 태그 추출 모델 로드 완료")
 
     # YOLO 결과 수신 서버 시작 (별도 데몬 스레드)
-    # [sshopy3-guide-vision-mutex] vision 손-감지 전용 로봇 = GUIDE_VISION_ROBOT_ID
-    vision_robot_bridge = VisionRobotBridge(robot_id=GUIDE_VISION_ROBOT_ID)
+    vision_robot_bridge = VisionRobotBridge(
+        robot_id=os.getenv("PINKYPRO_ROBOT_ID", "sshopy2")
+    )
     def _on_seat_status(seats):
         if _main_loop is not None:
             asyncio.run_coroutine_threadsafe(broadcast_seat_status(seats), _main_loop)
@@ -1591,22 +1581,19 @@ class SshopyLcdPageEvent(BaseModel):
     """LCD 페이지 전환 이벤트 (fire-and-forget 로깅용)."""
     page:     str
     prev:     Optional[str] = None
-    # [sshopy3-guide-vision-mutex] 모듈 상단 GUIDE_VISION_ROBOT_ID 참조
-    robot_id: str = GUIDE_VISION_ROBOT_ID
+    robot_id: str = "sshopy2"
 
 
 class SshopyLcdGuideStartReq(BaseModel):
     """LCD 안내 시작 요청 — fleet.start_guide() 인자."""
-    # [sshopy3-guide-vision-mutex] 모듈 상단 GUIDE_VISION_ROBOT_ID 참조
-    robot_id:  str = GUIDE_VISION_ROBOT_ID
+    robot_id:  str = "sshopy2"
     shoe_id:   str
     shoe_name: Optional[str] = ""
 
 
 class SshopyLcdGuideEndReq(BaseModel):
     """LCD 안내 종료 요청 — fleet.end_guide() 인자."""
-    # [sshopy3-guide-vision-mutex] 모듈 상단 GUIDE_VISION_ROBOT_ID 참조
-    robot_id: str = GUIDE_VISION_ROBOT_ID
+    robot_id: str = "sshopy2"
 
 
 # [sshopylcd연동] LCD 페이지 전환 이력 (인메모리, 최근 200건)
@@ -1676,7 +1663,7 @@ async def endpoint_sshopylcd_guide_end(req: SshopyLcdGuideEndReq):
 
 
 @app.get("/sshopylcd/guide/status")
-async def endpoint_sshopylcd_guide_status(robot_id: str = GUIDE_VISION_ROBOT_ID):  # [sshopy3-guide-vision-mutex]
+async def endpoint_sshopylcd_guide_status(robot_id: str = "sshopy2"):
     """
     안내 진행 상태 조회 — LCD 가 2초 주기로 폴링.
 

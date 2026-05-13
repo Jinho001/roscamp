@@ -50,10 +50,6 @@ WAYPOINTS = {
 ARRIVAL_THRESHOLD = 0.3   # 도착 판정 거리 (m)
 ARRIVAL_COOLDOWN  = 5.0   # 같은 웨이포인트 중복 트리거 방지 (초)
 
-# [sshopy3-guide-vision-mutex] vision(손-감지) 점유 강제 해제 timeout (초)
-# 도착 감지가 안 들어와도 이 시간이 지나면 vision_busy를 풀어 다른 시나리오 진입을 허용한다.
-VISION_BUSY_TIMEOUT = 120.0
-
 
 # ── 시착 시나리오 (Scene 2) 웨이포인트 ─────────────────────────────────────────
 # quaternion (oz, ow) → theta(yaw)
@@ -434,13 +430,6 @@ class _RobotState:
         self.guide_shoe_id: Optional[str] = None
         self.guide_shoe_name: Optional[str] = None
 
-        # [sshopy3-guide-vision-mutex] vision(손-감지) 이동 점유 마커
-        # try_vision_goal() 발행 시 True, 도착/timeout 시 False.
-        # _is_robot_idle()에 포함되어 다른 시나리오의 가로채기를 차단한다.
-        self.vision_busy:           bool          = False
-        self.vision_goal:           Optional[dict] = None   # {"x", "y"}
-        self.vision_goal_sent_time: float         = 0.0     # timeout 기준 시각
-
     def to_dict(self) -> dict:
         """
         역할: 로봇의 현재 상태를 WebSocket·REST 응답용 dict로 직렬화한다.
@@ -479,8 +468,6 @@ class _RobotState:
             "guide_stage":        self.guide_stage,
             "guide_shoe_id":      self.guide_shoe_id,
             "guide_shoe_name":    self.guide_shoe_name,
-            # [sshopy3-guide-vision-mutex] vision(손-감지) 점유 상태
-            "vision_busy":        self.vision_busy,
         }
 
     def reset_live_data(self):
@@ -1067,35 +1054,6 @@ class RobotManager:
                 self._on_guide_arrived(state)
             return
 
-        # [sshopy3-guide-vision-mutex] vision(손-감지) 이동 — 도착 시 vision_busy 해제
-        # vision_busy는 _is_robot_idle()에 포함되므로 여기서 풀어줘야 다른 시나리오 진입이 가능해진다.
-        # 안전장치: VISION_BUSY_TIMEOUT 초가 지나도 도착이 감지되지 않으면 강제 해제 (Nav2 stuck 대비)
-        if state.vision_busy:
-            now = time.time()
-            target = state.vision_goal
-            if target is not None:
-                dist = math.hypot(
-                    state.pose["x"] - target["x"],
-                    state.pose["y"] - target["y"],
-                )
-                if dist < ARRIVAL_THRESHOLD and (now - state._last_arrival_time) > ARRIVAL_COOLDOWN:
-                    state._last_arrival_time = now
-                    print(
-                        f"[fleet] {state.robot_id} (vision) 도착 — vision_busy 해제 "
-                        f"dist={dist:.3f}m"
-                    )
-                    state.vision_busy = False
-                    state.vision_goal = None
-                    return
-            if (now - state.vision_goal_sent_time) > VISION_BUSY_TIMEOUT:
-                print(
-                    f"[fleet] {state.robot_id} (vision) timeout — vision_busy 강제 해제 "
-                    f"({VISION_BUSY_TIMEOUT:.0f}s 경과)"
-                )
-                state.vision_busy = False
-                state.vision_goal = None
-            return
-
     def _tryon_target(self, state: _RobotState) -> dict | None:
         s = state.tryon_stage
         if s == TRYON_STAGE_TO_WAREJET:
@@ -1559,9 +1517,7 @@ class RobotManager:
         역할: 로봇이 어떤 시나리오도 진행 중이지 않은지 확인해 중복 시나리오 시작을 방지한다.
         입력: state — 확인할 로봇의 _RobotState
         동작 흐름:
-            delivery_stage, tryon_stage, inbound_stage, retrieval_stage,
-            inbound_demo_stage, guide_stage 가 모두 None이고
-            vision_busy 도 False 인지 확인
+            delivery_stage, tryon_stage, inbound_stage, retrieval_stage 가 모두 None인지 확인
         출력: True(완전 유휴) 또는 False(시나리오 진행 중)
         """
         return (
@@ -1570,8 +1526,7 @@ class RobotManager:
             state.inbound_stage     is None and
             state.retrieval_stage   is None and
             state.inbound_demo_stage is None and
-            state.guide_stage        is None and  # [sshopylcd연동]
-            not state.vision_busy                 # [sshopy3-guide-vision-mutex]
+            state.guide_stage        is None   # [sshopylcd연동]
         )
 
     def _assign_inbound_robot(self, preferred_id: Optional[str] = None) -> Optional[str]:
@@ -2281,34 +2236,6 @@ class RobotManager:
             "angular": {"x": 0.0,      "y": 0.0, "z": angular_z},
         }))
         return True
-
-    def try_vision_goal(self, robot_id: str, x: float, y: float,
-                        theta: float = 0.0) -> tuple[bool, str]:
-        """
-        [sshopy3-guide-vision-mutex] vision(손-감지) 전용 goal_pose 진입점.
-        역할: idle 검증 → goal_pose 발행 → vision_busy 마커 세팅을 원자적으로 수행.
-              발행된 goal은 _check_arrival에서 도착 감지(또는 VISION_BUSY_TIMEOUT) 시 자동 해제.
-        입력: robot_id, x(미터), y(미터), theta(yaw 라디안, 기본 0.0)
-        출력: (성공여부, 메시지)
-            False 사유: 로봇 없음 / pinky 아님 / 미연결 / 다른 시나리오 진행 중 / publish 실패
-        """
-        state = self._states.get(robot_id)
-        if not state or state.type != "pinky":
-            return False, f"{robot_id}는 pinky 타입이 아님"
-        if not state.connected:
-            return False, f"{robot_id} 연결 안 됨"
-        if not self._is_robot_idle(state):
-            return False, f"{robot_id} busy (다른 시나리오 진행 중)"
-
-        ok = self.goal_pose(robot_id, x, y, theta)
-        if not ok:
-            return False, f"{robot_id} goal_pose 발행 실패"
-
-        state.vision_busy           = True
-        state.vision_goal           = {"x": float(x), "y": float(y)}
-        state.vision_goal_sent_time = time.time()
-        state._last_arrival_time    = time.time()  # 직전 stage 도착 잔재로 인한 즉시 트리거 방지
-        return True, "ok"
 
     def goal_pose(self, robot_id: str, x: float, y: float, theta: float = 0.0,
                   _traffic_internal: bool = False) -> bool:
