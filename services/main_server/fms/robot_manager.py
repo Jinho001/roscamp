@@ -57,9 +57,12 @@ def _q_to_theta(oz: float, ow: float) -> float:
     return 2.0 * math.atan2(oz, ow)
 
 # 창고 / 회수존 (시착 시나리오 공용)
-TRYON_WAREJET   = {"x":  0.098, "y": 0.175, "theta": _q_to_theta( 1.000, 0.012)}
-TRYON_FRONTJET  = {"x":  0.858, "y": 0.523, "theta": _q_to_theta( 0.709, 0.705)}
-WAREJET_SUBZONE = {"x":  0.120, "y": 0.184, "theta": _q_to_theta( 0.999, 0.049)}
+# TRYON_WAREJET   = {"x":  0.098, "y": 0.175, "theta": _q_to_theta( 1.000, 0.012)}
+# TRYON_FRONTJET  = {"x":  0.858, "y": 0.523, "theta": _q_to_theta( 0.709, 0.705)}
+# WAREJET_SUBZONE = {"x":  0.120, "y": 0.184, "theta": _q_to_theta( 0.999, 0.049)}
+TRYON_WAREJET = {"x": 0.690, "y": 0.175, "theta": _q_to_theta(1.0, 0.022)}
+TRYON_FRONTJET = {"x": 0.874, "y": 0.526, "theta": _q_to_theta(0.695, 0.719)}
+WAREJET_SUBZONE = {"x": 0.144, "y": 0.004, "theta": _q_to_theta(-0.009, 1.000)}
 
 # 핑키별 홈위치 (sshopy1=1번핑기, sshopy2=2번핑키, sshopy3=3번핑키)
 TRYON_HOMES = {

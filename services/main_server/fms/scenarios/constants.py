@@ -8,8 +8,8 @@ def _q_to_theta(oz: float, ow: float) -> float:
 
 # ── 공용 웨이포인트 ──────────────────────────────────────────────────
 TRYON_WAREJET = {"x": 0.690, "y": 0.175, "theta": _q_to_theta(1.0, 0.022)}
-TRYON_FRONTJET = {"x": 0.720, "y": 0.477, "theta": _q_to_theta(0.686, 0.727)}
-WAREJET_SUBZONE = {"x": 0.010, "y": -0.038, "theta": _q_to_theta(0.025, 1.000)}
+TRYON_FRONTJET = {"x": 0.874, "y": 0.526, "theta": _q_to_theta(0.695, 0.719)}
+WAREJET_SUBZONE = {"x": 0.144, "y": 0.004, "theta": _q_to_theta(-0.009, 1.000)}
 
 # 핑키별 홈위치 (sshopy1=1번핑기, sshopy2=2번핑키, sshopy3=3번핑키)
 TRYON_HOMES = {
