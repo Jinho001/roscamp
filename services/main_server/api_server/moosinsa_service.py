@@ -2232,6 +2232,12 @@ async def api_robots():
     return [_fleet_state_to_ui(s) for s in fleet.get_all_states()]
 
 
+# [sshopy3-guide-vision-mutex] 디버그 — fleet raw to_dict() 노출 (vision_busy / *_stage 확인용)
+@app.get("/debug/fleet_raw")
+async def debug_fleet_raw():
+    return fleet.get_all_states()
+
+
 def _task_status(task: dict) -> str:
     """[실로봇연동] React admin_ui 와 동일한 status 표기 — 진행중/완료/실패."""
     if task.get("error"):
