@@ -51,8 +51,9 @@ ARRIVAL_THRESHOLD = 0.3   # 도착 판정 거리 (m)
 ARRIVAL_COOLDOWN  = 5.0   # 같은 웨이포인트 중복 트리거 방지 (초)
 
 # [sshopy3-guide-vision-mutex] vision(손-감지) 점유 강제 해제 timeout (초)
-# 도착 감지가 안 들어와도 이 시간이 지나면 vision_busy를 풀어 다른 시나리오 진입을 허용한다.
-VISION_BUSY_TIMEOUT = 120.0
+# Nav2 SUCCEEDED 또는 거리 도착이 감지 안 되어도 이 시간이 지나면 vision_busy를 풀어
+# 다른 시나리오(특히 guide) 진입을 허용한다. 거리 미달로 stuck 되는 케이스 fail-safe.
+VISION_BUSY_TIMEOUT = 10.0
 
 
 # ── 시착 시나리오 (Scene 2) 웨이포인트 ─────────────────────────────────────────
@@ -1069,24 +1070,34 @@ class RobotManager:
 
         # [sshopy3-guide-vision-mutex] vision(손-감지) 이동 — 도착 시 vision_busy 해제
         # vision_busy는 _is_robot_idle()에 포함되므로 여기서 풀어줘야 다른 시나리오 진입이 가능해진다.
-        # 안전장치: VISION_BUSY_TIMEOUT 초가 지나도 도착이 감지되지 않으면 강제 해제 (Nav2 stuck 대비)
+        # 해제 조건: Nav2 SUCCEEDED  OR  거리 < ARRIVAL_THRESHOLD (+ cooldown)
+        #   - SUCCEEDED 신호는 _on_nav_status가 _check_arrival을 직접 호출하므로 즉시 반영
+        #   - 거리 단일 조건만으로는 sshopy3가 손든 사람 좌표 0.3m 안에 못 들어가고 멈출 때 stuck
+        # 안전장치: VISION_BUSY_TIMEOUT 초가 지나도 해제 신호가 없으면 강제 해제
         if state.vision_busy:
             now = time.time()
+            nav_ok = state._nav_succeeded_at > state._goal_sent_time
             target = state.vision_goal
+            dist_ok = False
+            dist = None
             if target is not None:
                 dist = math.hypot(
                     state.pose["x"] - target["x"],
                     state.pose["y"] - target["y"],
                 )
-                if dist < ARRIVAL_THRESHOLD and (now - state._last_arrival_time) > ARRIVAL_COOLDOWN:
-                    state._last_arrival_time = now
-                    print(
-                        f"[fleet] {state.robot_id} (vision) 도착 — vision_busy 해제 "
-                        f"dist={dist:.3f}m"
-                    )
-                    state.vision_busy = False
-                    state.vision_goal = None
-                    return
+                dist_ok = (
+                    dist < ARRIVAL_THRESHOLD
+                    and (now - state._last_arrival_time) > ARRIVAL_COOLDOWN
+                )
+            if nav_ok or dist_ok:
+                state._last_arrival_time = now
+                why = "nav SUCCEEDED" if nav_ok else f"dist={dist:.3f}m"
+                print(
+                    f"[fleet] {state.robot_id} (vision) 도착 — vision_busy 해제 ({why})"
+                )
+                state.vision_busy = False
+                state.vision_goal = None
+                return
             if (now - state.vision_goal_sent_time) > VISION_BUSY_TIMEOUT:
                 print(
                     f"[fleet] {state.robot_id} (vision) timeout — vision_busy 강제 해제 "
