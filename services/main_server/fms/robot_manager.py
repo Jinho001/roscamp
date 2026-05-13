@@ -440,7 +440,10 @@ class _RobotState:
         # _is_robot_idle()에 포함되어 다른 시나리오의 가로채기를 차단한다.
         self.vision_busy:           bool          = False
         self.vision_goal:           Optional[dict] = None   # {"x", "y"}
-        self.vision_goal_sent_time: float         = 0.0     # timeout 기준 시각
+        self.vision_goal_sent_time: float         = 0.0     # timeout(VISION_BUSY_TIMEOUT) 기준 시각
+        # AI 검출 깜빡 대응: hands_up이 들어올 때마다(차단/허용 무관) 갱신.
+        # release_vision_busy_if_stale의 임계 측정 기준 — 진짜 handdown인지 판정.
+        self.last_hands_up_time:    float         = 0.0
 
     def to_dict(self) -> dict:
         """
@@ -2287,7 +2290,10 @@ class RobotManager:
         state = self._states.get(robot_id)
         if state is None or not state.vision_busy:
             return False
-        if (time.time() - state.vision_goal_sent_time) <= threshold_sec:
+        # [sshopy3-guide-vision-mutex] last_hands_up_time 기준으로 측정.
+        # 깜빡 검출(hands_up ↔ 빈 goal 반복) 시에도 hands_up이 가끔 들어오면 release 차단.
+        # 사용자가 진짜로 손을 내려서 threshold_sec 이상 hands_up이 안 들어와야만 release.
+        if (time.time() - state.last_hands_up_time) <= threshold_sec:
             return False
         state.vision_busy = False
         state.vision_goal = None
@@ -2315,6 +2321,9 @@ class RobotManager:
         state = self._states.get(robot_id)
         if not state or state.type != "pinky":
             return False, f"{robot_id}는 pinky 타입이 아님"
+        # [sshopy3-guide-vision-mutex] hands_up이 들어왔다는 사실 자체를 시각 기록.
+        # 차단 사유와 무관 — release_vision_busy_if_stale의 깜빡 검출 대응에 사용.
+        state.last_hands_up_time = time.time()
         if not state.connected:
             return False, f"{robot_id} 연결 안 됨"
         if not self._is_robot_idle(state):
