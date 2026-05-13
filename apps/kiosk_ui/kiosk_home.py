@@ -700,9 +700,40 @@ def _server_reachable() -> bool:
         return False
 
 
+# [좌석환경변수] 좌석 번호 환경변수 검증 — 시작 시 1회 호출.
+# 키오스크는 각 좌석 옆에 1대씩 배치되므로 기기별로 반드시 다른 값을 설정해야 한다.
+def _validate_seat_id() -> tuple[bool, str]:
+    """MOOSINSA_SEAT_ID 가 정수 1~4 범위인지 확인. (ok, message) 반환."""
+    raw = os.environ.get("MOOSINSA_SEAT_ID")
+    if raw is None or raw.strip() == "":
+        return False, "MOOSINSA_SEAT_ID 환경변수가 설정되지 않았습니다."
+    try:
+        val = int(raw)
+    except ValueError:
+        return False, f"MOOSINSA_SEAT_ID 값이 정수가 아닙니다: '{raw}'"
+    if val < 1 or val > 4:
+        return False, f"MOOSINSA_SEAT_ID 값이 1~4 범위를 벗어났습니다: {val}"
+    return True, ""
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    # [좌석환경변수] 좌석 환경변수 검증 — 누락/오설정 시 앱 시작 차단
+    ok, err_msg = _validate_seat_id()
+    if not ok:
+        dlg = QMessageBox()
+        dlg.setWindowTitle("좌석 설정 오류")
+        dlg.setIcon(QMessageBox.Critical)
+        dlg.setText(
+            f"{err_msg}\n\n"
+            "apps/kiosk_ui/.env 파일에 MOOSINSA_SEAT_ID 를\n"
+            "1~4 사이의 정수로 설정한 후 다시 실행해 주세요."
+        )
+        dlg.setStandardButtons(QMessageBox.Ok)
+        dlg.exec()
+        sys.exit(1)
 
     if not _server_reachable():
         dlg = QMessageBox()
