@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QByteArray
 from PySide6.QtSvgWidgets import QSvgWidget
+from kiosk_category_brand import _load_image_async  # [상품정보전달]
 
 REF_W, REF_H = 1080, 1920
 
@@ -80,6 +81,7 @@ class ProductCard(QWidget):
     def __init__(self, order: dict, parent=None):
         super().__init__(parent)
         self._order = order
+        self._image_url = order.get("image_url")  # [상품정보전달]
         self.setStyleSheet("background:transparent;")
 
         self._lo = QVBoxLayout(self)
@@ -169,6 +171,9 @@ class ProductCard(QWidget):
             f"QFrame{{background:#E8E3DC;"
             f"border:1px solid {C_BORDER};"
             f"border-radius:{max(round(12*s),4)}px;}}")
+        # [상품정보전달] 상품 이미지 비동기 로드 — kiosk_tryon.py 와 동일 패턴
+        if self._image_url:
+            _load_image_async(self._image_url, self._img_lbl, img_sz)
 
         info_lo = top_lo.itemAt(1).widget().layout()
         info_lo.setSpacing(max(round(10*s), 3))
@@ -291,6 +296,11 @@ class TryonAnotherPage(QWidget):
         self._card._color_v.setText(order.get("color", "—"))
         self._card._size_v.setText(order.get("size", "—"))
         self._card._seat_v.setText(str(order.get("seat", "—")))
+        # [상품정보전달] 이미지 URL 갱신 + 현재 프레임 크기로 즉시 재로드
+        self._card._image_url = order.get("image_url")
+        img_sz = self._card._img_frame.width()
+        if self._card._image_url and img_sz > 0:
+            _load_image_async(self._card._image_url, self._card._img_lbl, img_sz)
 
     def resizeEvent(self, event):                          # ★ CHANGED ★
         super().resizeEvent(event)

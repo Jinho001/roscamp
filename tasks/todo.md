@@ -81,3 +81,36 @@ Home ──┬──► Information ─(✕)──► Home
 - 창 크기 변경 시 비율 유지 확장 확인
 - 모든 페이지 전환 동작 확인
 - backend 미가동 상태에서도 UI는 fire-and-forget으로 정상 동작해야 함
+
+---
+
+# 키오스크 좌석 환경변수 전환 (2026-05-13)
+
+플랜 문서: `docs/kiosk_seat_env_var_20260513.md`
+브랜치: `fix/seunggyu-kiosk-seat`
+
+## 작업 항목
+- [x] `apps/kiosk_ui/.env.example` 신규 작성 (`MOOSINSA_SEAT_ID` 포함)
+- [x] `apps/kiosk_ui/kiosk_home.py` — 진입점에 좌석 환경변수 fail-fast 추가 (`_validate_seat_id`)
+- [x] `apps/kiosk_ui/kiosk_tryon.py` — `SeatMap` 제거, `SeatInfoLabel` 도입, 섹션 제목 변경
+- [x] `apps/kiosk_ui/kiosk_tryon.py` — `_on_request_clicked` 좌석 검증/재조회 단계 제거, seat=환경변수 값
+- [x] `apps/kiosk_ui/kiosk_api_client.py` — `fetch_seat_status`/`_req_seat_status`/`normalize_seat_status` 제거
+- [x] 자동화 검증 (AST parse / import / 환경변수 단위 테스트 / 코드 흐름 grep)
+- [ ] 사용자 환경에서 UI 시각 검증 (좌석 라벨 표시, ErrorDialog, tryon_another/delivery 좌석값)
+- [ ] 서버 연동 시나리오 검증 (request_tryon에 seat_id=N 전송 확인)
+
+## 결정 요약
+- 환경변수: `MOOSINSA_SEAT_ID` (정수 1~4)
+- 환경변수 누락 시: 앱 시작 차단 (fail-fast)
+- 서버측 변경: 없음 (`fleet._seat_occupied`는 그대로 유지 — 정당한 방어)
+- 배포: `.env.example` + 기기별 `.env`
+
+## 자동화 검증 결과
+- AST parse: 3개 파일 모두 OK
+- import 테스트: `MOOSINSA_SEAT_ID=2` 환경에서 kiosk_tryon import 성공, `SeatInfoLabel` 존재, `SeatMap`/`SEAT_STATUS` 제거 확인
+- `_validate_seat_id` 단위 테스트: 누락/빈문자열/비정수/범위밖(0,5)/정상(1~4)/공백 포함 모두 기대대로 동작
+- 죽은 참조 grep: 잔여 문자열 5개 모두 설명 주석 (실제 호출 없음)
+- seat_id 데이터 흐름: `self._seat_id` = env 정수 → `SeatInfoLabel` 표시 + `selection["seat"]=str(...)` + `request_tryon(seat_id=int(...))`
+
+## 리뷰 (작업 후 작성)
+- TBD (사용자 UI 검증 완료 후)
