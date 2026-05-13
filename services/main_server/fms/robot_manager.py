@@ -50,11 +50,6 @@ WAYPOINTS = {
 ARRIVAL_THRESHOLD = 0.3   # 도착 판정 거리 (m)
 ARRIVAL_COOLDOWN  = 5.0   # 같은 웨이포인트 중복 트리거 방지 (초)
 
-# [sshopy3-guide-vision-mutex] vision(손-감지) 점유 강제 해제 timeout (초)
-# Nav2 SUCCEEDED 또는 거리 도착이 감지 안 되어도 이 시간이 지나면 vision_busy를 풀어
-# 다른 시나리오(특히 guide) 진입을 허용한다. 거리 미달로 stuck 되는 케이스 fail-safe.
-VISION_BUSY_TIMEOUT = 5.0
-
 
 # ── 시착 시나리오 (Scene 2) 웨이포인트 ─────────────────────────────────────────
 # quaternion (oz, ow) → theta(yaw)
@@ -435,16 +430,6 @@ class _RobotState:
         self.guide_shoe_id: Optional[str] = None
         self.guide_shoe_name: Optional[str] = None
 
-        # [sshopy3-guide-vision-mutex] vision(손-감지) 이동 점유 마커
-        # try_vision_goal() 발행 시 True, 도착/timeout 시 False.
-        # _is_robot_idle()에 포함되어 다른 시나리오의 가로채기를 차단한다.
-        self.vision_busy:           bool          = False
-        self.vision_goal:           Optional[dict] = None   # {"x", "y"}
-        self.vision_goal_sent_time: float         = 0.0     # timeout(VISION_BUSY_TIMEOUT) 기준 시각
-        # AI 검출 깜빡 대응: hands_up이 들어올 때마다(차단/허용 무관) 갱신.
-        # release_vision_busy_if_stale의 임계 측정 기준 — 진짜 handdown인지 판정.
-        self.last_hands_up_time:    float         = 0.0
-
     def to_dict(self) -> dict:
         """
         역할: 로봇의 현재 상태를 WebSocket·REST 응답용 dict로 직렬화한다.
@@ -483,8 +468,6 @@ class _RobotState:
             "guide_stage":        self.guide_stage,
             "guide_shoe_id":      self.guide_shoe_id,
             "guide_shoe_name":    self.guide_shoe_name,
-            # [sshopy3-guide-vision-mutex] vision(손-감지) 점유 상태
-            "vision_busy":        self.vision_busy,
         }
 
     def reset_live_data(self):
@@ -1071,28 +1054,6 @@ class RobotManager:
                 self._on_guide_arrived(state)
             return
 
-        # [sshopy3-guide-vision-mutex] vision(손-감지) 이동 점유 — timeout 외 자동 해제 없음
-        # 도착 신호(nav SUCCEEDED, dist 도달)로는 vision_busy를 풀지 않는다.
-        # 사용자가 손 든 채로 머물러 있으면 새 vision result가 같은 좌표로 계속 들어와서
-        # 도착 → 해제 → 새 publish → 또 도착 → … 무한 루프가 발생하기 때문.
-        # 해제 경로: handdown(release_vision_busy_if_stale, 빈 goal 2s)  OR  timeout(5s)
-        if state.vision_busy:
-            now = time.time()
-            if (now - state.vision_goal_sent_time) > VISION_BUSY_TIMEOUT:
-                state.vision_busy = False
-                state.vision_goal = None
-                # 진행 중 Nav2 goal 취소 — cancel_tryon 패턴 (현재 pose 재발행 + cmd_vel(0,0))
-                if state.pose:
-                    self.goal_pose(
-                        state.robot_id, state.pose["x"], state.pose["y"], 0.0
-                    )
-                self.cmd_vel(state.robot_id, 0.0, 0.0)
-                print(
-                    f"[fleet] {state.robot_id} (vision) timeout — vision_busy 강제 해제 + 정지 "
-                    f"({VISION_BUSY_TIMEOUT:.0f}s 경과)"
-                )
-            return
-
     def _tryon_target(self, state: _RobotState) -> dict | None:
         s = state.tryon_stage
         if s == TRYON_STAGE_TO_WAREJET:
@@ -1557,8 +1518,7 @@ class RobotManager:
         입력: state — 확인할 로봇의 _RobotState
         동작 흐름:
             delivery_stage, tryon_stage, inbound_stage, retrieval_stage,
-            inbound_demo_stage, guide_stage 가 모두 None이고
-            vision_busy 도 False 인지 확인
+            inbound_demo_stage, guide_stage 가 모두 None인지 확인
         출력: True(완전 유휴) 또는 False(시나리오 진행 중)
         """
         return (
@@ -1567,8 +1527,7 @@ class RobotManager:
             state.inbound_stage     is None and
             state.retrieval_stage   is None and
             state.inbound_demo_stage is None and
-            state.guide_stage        is None and  # [sshopylcd연동]
-            not state.vision_busy                 # [sshopy3-guide-vision-mutex]
+            state.guide_stage        is None   # [sshopylcd연동]
         )
 
     def _assign_inbound_robot(self, preferred_id: Optional[str] = None) -> Optional[str]:
@@ -2278,66 +2237,6 @@ class RobotManager:
             "angular": {"x": 0.0,      "y": 0.0, "z": angular_z},
         }))
         return True
-
-    def release_vision_busy_if_stale(self, robot_id: str, threshold_sec: float) -> bool:
-        """
-        [sshopy3-guide-vision-mutex] vision_busy를 조건부로 해제.
-        vision_busy=True 이고 마지막 vision goal 발행 후 threshold_sec 초 지났으면 해제한다.
-        용도: handle_result에서 빈 goal(손 내림)이 지속될 때 vision 점유를 신속히 풀기 위함.
-        해제 시 진행 중인 Nav2 goal도 함께 취소한다 (cancel_tryon 패턴 동일).
-        출력: True(해제 수행) / False(해제 안 함 — busy 아니거나 시간 미달)
-        """
-        state = self._states.get(robot_id)
-        if state is None or not state.vision_busy:
-            return False
-        # [sshopy3-guide-vision-mutex] last_hands_up_time 기준으로 측정.
-        # 깜빡 검출(hands_up ↔ 빈 goal 반복) 시에도 hands_up이 가끔 들어오면 release 차단.
-        # 사용자가 진짜로 손을 내려서 threshold_sec 이상 hands_up이 안 들어와야만 release.
-        if (time.time() - state.last_hands_up_time) <= threshold_sec:
-            return False
-        state.vision_busy = False
-        state.vision_goal = None
-        # [sshopy3-guide-vision-mutex] 진행 중 Nav2 goal 취소 — cancel_tryon 패턴
-        # 손 내림 후에도 sshopy가 손든 사람 좌표로 계속 이동하던 문제 해결.
-        if state.pose:
-            self.goal_pose(robot_id, state.pose["x"], state.pose["y"], 0.0)
-        self.cmd_vel(robot_id, 0.0, 0.0)
-        print(
-            f"[fleet] {robot_id} (vision) 빈 goal {threshold_sec:.0f}s 지속 → "
-            f"vision_busy 해제 + 정지"
-        )
-        return True
-
-    def try_vision_goal(self, robot_id: str, x: float, y: float,
-                        theta: float = 0.0) -> tuple[bool, str]:
-        """
-        [sshopy3-guide-vision-mutex] vision(손-감지) 전용 goal_pose 진입점.
-        역할: idle 검증 → goal_pose 발행 → vision_busy 마커 세팅을 원자적으로 수행.
-              발행된 goal은 _check_arrival에서 도착 감지(또는 VISION_BUSY_TIMEOUT) 시 자동 해제.
-        입력: robot_id, x(미터), y(미터), theta(yaw 라디안, 기본 0.0)
-        출력: (성공여부, 메시지)
-            False 사유: 로봇 없음 / pinky 아님 / 미연결 / 다른 시나리오 진행 중 / publish 실패
-        """
-        state = self._states.get(robot_id)
-        if not state or state.type != "pinky":
-            return False, f"{robot_id}는 pinky 타입이 아님"
-        # [sshopy3-guide-vision-mutex] hands_up이 들어왔다는 사실 자체를 시각 기록.
-        # 차단 사유와 무관 — release_vision_busy_if_stale의 깜빡 검출 대응에 사용.
-        state.last_hands_up_time = time.time()
-        if not state.connected:
-            return False, f"{robot_id} 연결 안 됨"
-        if not self._is_robot_idle(state):
-            return False, f"{robot_id} busy (다른 시나리오 진행 중)"
-
-        ok = self.goal_pose(robot_id, x, y, theta)
-        if not ok:
-            return False, f"{robot_id} goal_pose 발행 실패"
-
-        state.vision_busy           = True
-        state.vision_goal           = {"x": float(x), "y": float(y)}
-        state.vision_goal_sent_time = time.time()
-        state._last_arrival_time    = time.time()  # 직전 stage 도착 잔재로 인한 즉시 트리거 방지
-        return True, "ok"
 
     def goal_pose(self, robot_id: str, x: float, y: float, theta: float = 0.0,
                   _traffic_internal: bool = False) -> bool:
