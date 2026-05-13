@@ -1068,41 +1068,17 @@ class RobotManager:
                 self._on_guide_arrived(state)
             return
 
-        # [sshopy3-guide-vision-mutex] vision(손-감지) 이동 — 도착 시 vision_busy 해제
-        # vision_busy는 _is_robot_idle()에 포함되므로 여기서 풀어줘야 다른 시나리오 진입이 가능해진다.
-        # 해제 조건: Nav2 SUCCEEDED  OR  거리 < ARRIVAL_THRESHOLD (+ cooldown)
-        #   - SUCCEEDED 신호는 _on_nav_status가 _check_arrival을 직접 호출하므로 즉시 반영
-        #   - 거리 단일 조건만으로는 sshopy3가 손든 사람 좌표 0.3m 안에 못 들어가고 멈출 때 stuck
-        # 안전장치: VISION_BUSY_TIMEOUT 초가 지나도 해제 신호가 없으면 강제 해제
+        # [sshopy3-guide-vision-mutex] vision(손-감지) 이동 점유 — timeout 외 자동 해제 없음
+        # 도착 신호(nav SUCCEEDED, dist 도달)로는 vision_busy를 풀지 않는다.
+        # 사용자가 손 든 채로 머물러 있으면 새 vision result가 같은 좌표로 계속 들어와서
+        # 도착 → 해제 → 새 publish → 또 도착 → … 무한 루프가 발생하기 때문.
+        # 해제 경로: handdown(release_vision_busy_if_stale, 빈 goal 2s)  OR  timeout(5s)
         if state.vision_busy:
             now = time.time()
-            nav_ok = state._nav_succeeded_at > state._goal_sent_time
-            target = state.vision_goal
-            dist_ok = False
-            dist = None
-            if target is not None:
-                dist = math.hypot(
-                    state.pose["x"] - target["x"],
-                    state.pose["y"] - target["y"],
-                )
-                dist_ok = (
-                    dist < ARRIVAL_THRESHOLD
-                    and (now - state._last_arrival_time) > ARRIVAL_COOLDOWN
-                )
-            if nav_ok or dist_ok:
-                state._last_arrival_time = now
-                why = "nav SUCCEEDED" if nav_ok else f"dist={dist:.3f}m"
-                print(
-                    f"[fleet] {state.robot_id} (vision) 도착 — vision_busy 해제 ({why})"
-                )
-                state.vision_busy = False
-                state.vision_goal = None
-                return
             if (now - state.vision_goal_sent_time) > VISION_BUSY_TIMEOUT:
                 state.vision_busy = False
                 state.vision_goal = None
-                # [sshopy3-guide-vision-mutex] timeout 시에도 진행 중 Nav2 goal 취소
-                # cancel_tryon 패턴 — 현재 pose 재발행 + cmd_vel(0,0) 정지
+                # 진행 중 Nav2 goal 취소 — cancel_tryon 패턴 (현재 pose 재발행 + cmd_vel(0,0))
                 if state.pose:
                     self.goal_pose(
                         state.robot_id, state.pose["x"], state.pose["y"], 0.0
