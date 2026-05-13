@@ -237,6 +237,9 @@ class ConfirmOverlay(QFrame):
             self._secondary_btn.setVisible(True)
             self._on_secondary = on_secondary or (lambda: None)
 
+        # [arrived_msg-truncate-fix] 메시지가 바뀌었으므로 카드 크기 즉시 재계산
+        self._apply_scale()
+
     def show_over(self, parent: QWidget):
         """parent 페이지 위에 덮어씌워 표시. 부모 크기에 맞춰 자동 리사이즈."""
         self.setParent(parent)
@@ -263,11 +266,22 @@ class ConfirmOverlay(QFrame):
         s = min(pw / REF_W, ph / REF_H)
         self._s = s
 
-        card_w = max(round(260 * s), 180)
-        card_h = max(round(160 * s), 110)
         radius = max(round(12 * s), 6)
         pad = max(round(16 * s), 8)
         spacing = max(round(12 * s), 6)
+        fs_msg = max(round(13 * s), 10)
+        btn_h = max(round(32 * s), 22)
+
+        # [arrived_msg-truncate-fix] 메시지 줄 수에 맞춰 카드 높이를 동적 확장.
+        # 기존 setFixedSize(*, 160*s) 고정값으로는 ARRIVED_MSG(6줄)가 잘려나옴.
+        text = self._msg.text() or ""
+        line_count = max(text.count("\n") + 1, 1)
+        line_h = int(fs_msg * 1.6)  # font-size × line-height(1.5) 여유 포함
+        msg_required_h = line_h * line_count
+        required_card_h = msg_required_h + btn_h + pad * 2 + spacing * 2
+
+        card_w = max(round(260 * s), 180)
+        card_h = max(round(160 * s), 110, required_card_h)
 
         self._card.setFixedSize(card_w, card_h)
         self._card.setStyleSheet(
@@ -276,14 +290,11 @@ class ConfirmOverlay(QFrame):
         self._card_lo.setContentsMargins(pad, pad, pad, pad)
         self._card_lo.setSpacing(spacing)
 
-        fs_msg = max(round(13 * s), 10)
         self._msg.setStyleSheet(
             f"color:{C_DARK};font-size:{fs_msg}px;"
             f"font-family:'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif;"
             f"font-weight:400;line-height:1.5;background:transparent;"
         )
-
-        btn_h = max(round(32 * s), 22)
         btn_radius = max(round(8 * s), 4)
         fs_btn = max(round(12 * s), 9)
         self._btn_row.setSpacing(max(round(8 * s), 4))
