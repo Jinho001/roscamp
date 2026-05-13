@@ -560,12 +560,19 @@ class VisionRobotBridge:
         goals = result.get("goals") or []
 
         if not goals:
-            # [sshopy3-guide-vision-mutex] 빈 goal 2초 지속 시 손 내림으로 간주 → vision_busy 해제
-            # 운영 환경에서 Nav2 SUCCEEDED 신호가 안 오는 경우(거리 미달로 stuck) 다른 task
-            # (특히 guide) 진입을 신속히 허용하기 위함.
-            fleet.release_vision_busy_if_stale(self.robot_id, 2.0)
             logger.info(
                 f"[VISION->PINKY] frame_id={frame_id} hand_raise goal 없음 - 명령 없음"
+            )
+            return
+
+        # [sshopy3-guide-vision-mutex] guide 진행 중이면 vision goal 차단 (단방향 가드)
+        # vision은 짧은 publish 한 번이면 끝나므로 vision 자체엔 보호 마커를 두지 않는다 —
+        # 원래(2026-05-13 회귀 전) 단순 publish 동작 유지.
+        guide_state = fleet._states.get(self.robot_id)
+        if guide_state is not None and guide_state.guide_stage is not None:
+            logger.info(
+                f"[VISION->PINKY] frame_id={frame_id} skip: "
+                f"{self.robot_id} guide_stage={guide_state.guide_stage} 진행 중"
             )
             return
 
@@ -581,20 +588,16 @@ class VisionRobotBridge:
                 )
                 continue
 
-            # [sshopy3-guide-vision-mutex] try_vision_goal: idle 검증 + vision_busy 마커 세팅
-            # 다른 시나리오(guide/tryon/inbound/retrieval) 진행 중이거나
-            # 직전 vision 이동이 아직 끝나지 않았다면 발행 자체를 차단한다.
-            ok, msg = fleet.try_vision_goal(
-                self.robot_id, float(x), float(y), float(theta)
-            )
+            ok = fleet.goal_pose(self.robot_id, float(x), float(y), float(theta))
             if ok:
                 logger.warning(
                     f"[VISION->PINKY] hands_up goal 전송 → robot={self.robot_id} "
                     f"x={float(x):.3f} y={float(y):.3f} theta={float(theta):.3f}"
                 )
             else:
-                logger.info(
-                    f"[VISION->PINKY] robot={self.robot_id} skip: {msg}"
+                logger.warning(
+                    f"[VISION->PINKY] robot={self.robot_id} goal_pose 실패 "
+                    f"(연결 상태 확인 필요)"
                 )
 
 
@@ -2234,12 +2237,6 @@ async def api_inc_retrieval_completed(req: Optional[_RetrievalCompletedIncReq] =
 async def api_robots():
     """[monitoring_ui] 로봇 목록 — fleet 상태를 GUI 형식으로 변환."""
     return [_fleet_state_to_ui(s) for s in fleet.get_all_states()]
-
-
-# [sshopy3-guide-vision-mutex] 디버그 — fleet raw to_dict() 노출 (vision_busy / *_stage 확인용)
-@app.get("/debug/fleet_raw")
-async def debug_fleet_raw():
-    return fleet.get_all_states()
 
 
 def _task_status(task: dict) -> str:
