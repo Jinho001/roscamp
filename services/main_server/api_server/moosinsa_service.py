@@ -400,6 +400,11 @@ class MLLMClient:
             return None
 
         results = resp.get("results", [])
+        
+        for item in results:
+            if "colors" not in item and "color" in item:
+                item["colors"] = item.pop("color")
+        
         if not results:
             logger.warning(f"M_LLM 매칭 상품 없음 - user_text='{user_text}'")
             return None
