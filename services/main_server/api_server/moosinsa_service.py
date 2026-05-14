@@ -68,6 +68,7 @@ from db.mysql import (
     get_shoe_information_by_shoe_id,
     get_shoe_information_by_shoe_id_from_inventory,
     set_variant_stock_zero,  # [요청] 시착 요청 시 shoes_inventory stock=0 처리용
+    increment_inventory_stock_by_id,  # [요청] QR 입고 시 shoes_inventory.id stock+=1
 )
 
 from dotenv import load_dotenv
@@ -2638,12 +2639,41 @@ class QrProductInfo(BaseModel):  # [요청]
 async def endpoint_qr_product_info(msg: QrProductInfo):
     """
     [요청] jetcobot QR 인식 결과 수신 엔드포인트.
-    현재는 수신/로깅만 수행. DB 조회·후속 로직은 추후 추가.
+    raw_payload(JSON 문자열) 의 'id' 키를 추출해
+    shoes_inventory.id 가 일치하는 row 의 stock 을 +1 한다.
+    파싱 실패·매칭 0건 등은 200 OK + warning 로그로 처리하여
+    qr_server 의 웹훅 재전송을 유발하지 않는다.
     """
     print(f"[QR] 수신: robot_id={msg.robot_id}, product_id={msg.product_id}, raw={msg.raw_payload}")
+
+    # 1) raw_payload 파싱
+    if not msg.raw_payload:
+        print("[QR][warn] raw_payload 가 비어있음 — DB 갱신 생략")
+        return {"result": "ok", "updated": 0, "reason": "empty_raw_payload"}
+
+    try:
+        parsed = json.loads(msg.raw_payload)
+    except (ValueError, TypeError) as e:
+        print(f"[QR][warn] raw_payload JSON 파싱 실패: {e} — DB 갱신 생략")
+        return {"result": "ok", "updated": 0, "reason": "invalid_json"}
+
+    if not isinstance(parsed, dict) or "id" not in parsed:
+        print(f"[QR][warn] raw_payload 에 'id' 키 없음: parsed={parsed} — DB 갱신 생략")
+        return {"result": "ok", "updated": 0, "reason": "missing_id_key"}
+
+    inventory_id = parsed["id"]
+
+    # 2) shoes_inventory.id 기준 stock += 1
+    affected = increment_inventory_stock_by_id(inventory_id)
+    if affected == 0:
+        print(f"[QR][warn] shoes_inventory.id={inventory_id} 매칭 0건 — stock 갱신 없음")
+    else:
+        print(f"[QR] shoes_inventory.id={inventory_id} stock += 1 (rows={affected})")
+
     return {
         "result": "ok",
-        "received": msg.model_dump(),
+        "updated": affected,
+        "inventory_id": inventory_id,
     }
 
 

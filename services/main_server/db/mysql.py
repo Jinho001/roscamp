@@ -230,3 +230,56 @@ def set_variant_stock_zero(shoe_id: str, color: str, size) -> int:
             cursor.close()
         if conn:
             conn.close()
+
+
+# ─────────────────────────────────────────────────────────────
+# [요청] QR 입고 시 shoes_inventory.id 기준 stock += 1
+# ─────────────────────────────────────────────────────────────
+def increment_inventory_stock_by_id(inventory_id) -> int:
+    """
+    [요청] shoes_inventory.id 가 일치하는 row 의 stock 을 +1 한다.
+
+    /qr_product_info 웹훅에서 호출되며, raw_payload(JSON) 의 'id' 키 값을
+    그대로 받아 PK 로 사용한다.
+
+    Returns:
+        업데이트된 row 개수 (매칭 없으면 0).
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        sql = """
+            UPDATE shoes_inventory
+               SET stock = stock + 1
+             WHERE id = %s
+        """
+        cursor.execute(sql, (inventory_id,))
+        conn.commit()
+        return cursor.rowcount
+
+    except mysql.connector.Error as e:
+        print("MySQL 오류:", e)
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"MySQL 오류: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("서버 오류:", e)
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"서버 오류: {str(e)}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
