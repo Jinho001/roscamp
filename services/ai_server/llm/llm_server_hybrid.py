@@ -594,7 +594,7 @@ def filter_llm_tags_by_evidence(llm_tags, evidence_text):
 
     return filtered
 
-def extract_hybrid_tags(user_text, accumulated_tags):
+def extract_hybrid_tags_with_llm(user_text, accumulated_tags):
     # 1차: 규칙 기반
     rule_tags = extract_tags_rule_based(user_text)
 
