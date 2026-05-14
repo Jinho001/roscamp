@@ -724,7 +724,7 @@ class ScenarioOrchestrator:
         # new_tags = extract_tags(req.keyword)
         # new_tags = convert_color_tags_to_english(new_tags)
         # merged_tags = merge_tags(req.accumulated_tags, new_tags)
-        logger.info(f"[STEP3] 추출된 태그: {new_tags}, 누적 태그: {merged_tags}")
+        logger.info(f"[STEP3] M_LLM으로 원문 전달: keyword={req.keyword}, accumulated_tags={req.accumulated_tags}")
 
         try:
             result = await self.llm.request_filtering(
@@ -803,7 +803,11 @@ async def lifespan(app: FastAPI):
 
     # M_LLM 클라이언트 초기화
     # llm_client = MLLMClient(host=MLLM_HOST, port=MLLM_PORT)
-    llm_client = MLLMClient(os.getenv("MLLM_HOST") , os.getenv("MLLM_PORT"))
+    # llm_client = MLLMClient(os.getenv("MLLM_HOST") , os.getenv("MLLM_PORT"))
+    llm_client = MLLMClient(
+        host=os.getenv("MLLM_HOST", "192.168.1.121"),
+        port=int(os.getenv("MLLM_PORT", "9000"))
+    )
     if await llm_client.health_check():
         # logger.info(f"M_LLM 연결 확인: {MLLM_HOST}:{MLLM_PORT}")
         logger.info("Moosinsa Service 시작 완료 - M_LLM 연결 가능")
@@ -813,8 +817,8 @@ async def lifespan(app: FastAPI):
 
     # loop 먼저 선언하고 모델 로드
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, load_llm_model)
-    logger.info("LLM 태그 추출 모델 로드 완료")
+    # await loop.run_in_executor(None, load_llm_model)
+    # logger.info("LLM 태그 추출 모델 로드 완료")
 
     # YOLO 결과 수신 서버 시작 (별도 데몬 스레드)
     # [sshopy3-guide-vision-mutex] vision 손-감지 전용 로봇 = GUIDE_VISION_ROBOT_ID
