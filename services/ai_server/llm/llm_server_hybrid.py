@@ -341,6 +341,12 @@ def parse_color_field(color_raw):
 
     return [str(color_raw).strip().lower()]
 
+def normalize_db_colors(colors):
+    result = []
+    for c in colors:
+        c = str(c).strip().lower()
+        result.append(COLOR_SYNONYMS.get(c, c))
+    return result
 
 def color_list_to_text(color_value):
     if isinstance(color_value, list):
@@ -503,6 +509,7 @@ def load_inventory_from_db():
             for row in rows:
                 color_raw = row.get("colors")
                 color_parsed = parse_color_field(color_raw)
+                color_parsed = normalize_db_colors(color_parsed)
 
                 inventory.append({
                     "id": row.get("id"),
@@ -666,6 +673,9 @@ def get_recommendations(user_text, accumulated_tags, inventory):
         ]
     else:
         candidates = [s for s in inventory if match_all_filters(s, accumulated_tags)]
+        if not candidates:
+            print("  ⚠️ AND 필터 후보 없음 → 점수 기반 전체 후보로 fallback")
+            candidates = inventory
 
     ranked = []
     for shoe in candidates:
