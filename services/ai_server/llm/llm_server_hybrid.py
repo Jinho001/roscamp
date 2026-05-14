@@ -320,21 +320,21 @@ def load_inventory_from_db():
             cursor.execute(f"""
                 SELECT 
                     s.id,
-                    s.shoe_id,
+                    s.ssid AS shoe_id,
                     s.brand,
                     s.model,
-                    s.colors,
+                    s.color AS colors,
                     s.image_url,
                     s.price,
                     s.tags,
                     SUM(si.stock) AS stock
                 FROM `{SHOES_TABLE_NAME}` s
                 JOIN `{INVENTORY_TABLE_NAME}` si
-                    ON s.shoe_id = si.shoe_id
+                    ON s.ssid = si.shoe_id
                 WHERE si.stock > 0
                 GROUP BY 
-                    s.id, s.shoe_id, s.brand, s.model,
-                    s.colors, s.image_url, s.price, s.tags
+                    s.id, s.ssid, s.brand, s.model,
+                    s.color, s.image_url, s.price, s.tags
             """)
             rows = cursor.fetchall()
             for row in rows:
