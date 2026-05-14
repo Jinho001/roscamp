@@ -27,7 +27,7 @@ SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 9000
 TOP_K = 3
 
-MODEL_ID = "google/gemma-2-2b-it"
+MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
 
 _tokenizer = None
 _llm_model = None
