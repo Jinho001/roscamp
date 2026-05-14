@@ -7,7 +7,10 @@ import pymysql
 import random
 import time
 
-# ── MySQL 접속 설정 ──
+# ─────────────────────────────────────────────
+# MySQL 접속 설정
+# ─────────────────────────────────────────────
+
 DB_CONFIG = {
     "host": "192.168.1.121",
     "user": "admin",
@@ -17,10 +20,14 @@ DB_CONFIG = {
 }
 
 SHOES_TABLE_NAME = "llm_shoes"
-INVENTORY_TABLE_NAME = "shoes_inventory"
+
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 9000
 TOP_K = 3
+
+# ─────────────────────────────────────────────
+# 태그 스키마
+# ─────────────────────────────────────────────
 
 TAG_SCHEMA = {
     "activity": ["러닝", "웨이트", "등산", "축구", "농구", "데이트", "출근", "일상", "격식", "캠핑", "물놀이"],
@@ -34,8 +41,14 @@ TAG_SCHEMA = {
 }
 
 WEIGHTS = {
-    "activity": 5, "style": 3, "feature": 4, "color": 3,
-    "brand": 5, "season_weather": 3, "price": 4, "target": 3
+    "activity": 5,
+    "style": 3,
+    "feature": 4,
+    "color": 3,
+    "brand": 5,
+    "season_weather": 3,
+    "price": 4,
+    "target": 3,
 }
 
 MODEL_SYNONYMS = {
@@ -73,39 +86,90 @@ COLOR_SYNONYMS = {
 
 RULE_SYNONYMS = {
     "activity": {
-        "데일리": "일상", "평소": "일상", "회사": "출근", "출근룩": "출근",
-        "조깅": "러닝", "러닝화": "러닝",
-        "헬스": "웨이트", "웨이트": "웨이트", "근력운동": "웨이트", "헬스장": "웨이트",
-        "소개팅": "데이트", "면접": "격식", "결혼식": "격식",
-        "풋살": "축구", "축구화": "축구", "농구화": "농구", "농구": "농구",
-        "등산": "등산", "캠핑": "캠핑", "물놀이": "물놀이",
+        "데일리": "일상",
+        "평소": "일상",
+        "회사": "출근",
+        "출근룩": "출근",
+        "조깅": "러닝",
+        "러닝화": "러닝",
+        "헬스": "웨이트",
+        "웨이트": "웨이트",
+        "근력운동": "웨이트",
+        "헬스장": "웨이트",
+        "소개팅": "데이트",
+        "면접": "격식",
+        "결혼식": "격식",
+        "풋살": "축구",
+        "축구화": "축구",
+        "농구화": "농구",
+        "농구": "농구",
+        "등산": "등산",
+        "캠핑": "캠핑",
+        "물놀이": "물놀이",
     },
     "style": {
-        "힙한": "힙한", "무난한": "무난한", "깔끔한": "깔끔한", "화려한": "화려한",
-        "빈티지": "빈티지", "클래식": "클래식", "귀여운": "귀여운", "레트로": "레트로",
-        "테크웨어": "테크웨어", "고프코어": "고프코어", "스포티": "스포티", "발레코어": "발레코어",
-        "심플한": "깔끔한", "베이직한": "무난한", "튀는": "화려한", "아웃도어": "고프코어",
+        "힙한": "힙한",
+        "무난한": "무난한",
+        "깔끔한": "깔끔한",
+        "화려한": "화려한",
+        "빈티지": "빈티지",
+        "클래식": "클래식",
+        "귀여운": "귀여운",
+        "레트로": "레트로",
+        "테크웨어": "테크웨어",
+        "고프코어": "고프코어",
+        "스포티": "스포티",
+        "발레코어": "발레코어",
+        "심플한": "깔끔한",
+        "베이직한": "무난한",
+        "튀는": "화려한",
+        "아웃도어": "고프코어",
     },
     "feature": {
-        "푹신한": "쿠션감", "쿠션": "쿠션감",
-        "발편한": "편안함", "발 편한": "편안함", "편하고": "편안함", "편한": "편안함",
-        "넓은발볼": "발볼 넓음", "발볼큰": "발볼 넓음", "발볼 넓": "발볼 넓음",
-        "비올때": "방수", "방수": "방수",
-        "안미끄러운": "미끄럼 방지", "미끄럼": "미끄럼 방지",
-        "가벼운": "가벼움", "따뜻한": "보온성", "털신": "보온성",
-        "통기성": "통기성", "내구성": "내구성", "키높이": "키높이",
+        "푹신한": "쿠션감",
+        "쿠션": "쿠션감",
+        "발편한": "편안함",
+        "발 편한": "편안함",
+        "편하고": "편안함",
+        "편한": "편안함",
+        "넓은발볼": "발볼 넓음",
+        "발볼큰": "발볼 넓음",
+        "발볼 넓": "발볼 넓음",
+        "비올때": "방수",
+        "방수": "방수",
+        "안미끄러운": "미끄럼 방지",
+        "미끄럼": "미끄럼 방지",
+        "가벼운": "가벼움",
+        "따뜻한": "보온성",
+        "털신": "보온성",
+        "통기성": "통기성",
+        "내구성": "내구성",
+        "키높이": "키높이",
     },
     "season_weather": {
-        "여름": "여름용", "겨울": "겨울용", "봄": "봄/가을용", "가을": "봄/가을용",
-        "사계절": "사계절용", "우천": "우천용",
+        "여름": "여름용",
+        "겨울": "겨울용",
+        "봄": "봄/가을용",
+        "가을": "봄/가을용",
+        "사계절": "사계절용",
+        "우천": "우천용",
     },
     "price": {
-        "저렴한": "가성비", "싼": "가성비", "가성비": "가성비",
-        "일반": "일반", "고가": "프리미엄", "비싼": "프리미엄", "프리미엄": "프리미엄",
+        "저렴한": "가성비",
+        "싼": "가성비",
+        "가성비": "가성비",
+        "일반": "일반",
+        "고가": "프리미엄",
+        "비싼": "프리미엄",
+        "프리미엄": "프리미엄",
     },
     "target": {
-        "남성": "남성용", "남자": "남성용", "여성": "여성용", "여자": "여성용",
-        "공용": "공용", "남녀공용": "공용",
+        "남성": "남성용",
+        "남자": "남성용",
+        "여성": "여성용",
+        "여자": "여성용",
+        "공용": "공용",
+        "남녀공용": "공용",
     },
 }
 
@@ -144,6 +208,7 @@ TAG_EVIDENCE_KEYWORDS = {
         "미끄럼 방지": ["미끄", "접지"],
         "통기성": ["시원", "땀", "통풍", "답답"],
         "보온성": ["따뜻", "시린", "시리", "추운"],
+        "키높이": ["키높", "키커", "키 커", "커보", "커 보"],
         "가벼움": ["가볍", "무겁지"],
         "내구성": ["튼튼", "오래신", "망가지", "내구"],
     },
@@ -154,6 +219,10 @@ TAG_EVIDENCE_KEYWORDS = {
     },
 }
 
+
+# ─────────────────────────────────────────────
+# 기본 유틸
+# ─────────────────────────────────────────────
 
 def empty_tags():
     return {k: [] for k in TAG_SCHEMA.keys()}
@@ -176,9 +245,20 @@ def extract_codes(text):
 
 
 def decompose_hangul(text):
-    CHOSEONG = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ']
-    JUNGSEONG = ['ㅏ','ㅐ','ㅑ','ㅒ','ㅓ','ㅔ','ㅕ','ㅖ','ㅗ','ㅘ','ㅙ','ㅚ','ㅛ','ㅜ','ㅝ','ㅞ','ㅟ','ㅠ','ㅡ','ㅢ','ㅣ']
-    JONGSEONG = ['', 'ㄱ','ㄲ','ㄳ','ㄴ','ㄵ','ㄶ','ㄷ','ㄹ','ㄺ','ㄻ','ㄼ','ㄽ','ㄾ','ㄿ','ㅀ','ㅁ','ㅂ','ㅄ','ㅅ','ㅆ','ㅇ','ㅈ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ']
+    CHOSEONG = [
+        "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ",
+        "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
+    ]
+    JUNGSEONG = [
+        "ㅏ", "ㅐ", "ㅑ", "ㅒ", "ㅓ", "ㅔ", "ㅕ", "ㅖ", "ㅗ", "ㅘ",
+        "ㅙ", "ㅚ", "ㅛ", "ㅜ", "ㅝ", "ㅞ", "ㅟ", "ㅠ", "ㅡ", "ㅢ", "ㅣ"
+    ]
+    JONGSEONG = [
+        "", "ㄱ", "ㄲ", "ㄳ", "ㄴ", "ㄵ", "ㄶ", "ㄷ", "ㄹ", "ㄺ",
+        "ㄻ", "ㄼ", "ㄽ", "ㄾ", "ㄿ", "ㅀ", "ㅁ", "ㅂ", "ㅄ", "ㅅ",
+        "ㅆ", "ㅇ", "ㅈ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
+    ]
+
     result = []
     for char in str(text):
         code = ord(char)
@@ -198,7 +278,8 @@ def decompose_hangul(text):
 
 
 def dedup_list(values):
-    out, seen = [], set()
+    out = []
+    seen = set()
     for v in values:
         if v not in seen:
             seen.add(v)
@@ -221,35 +302,43 @@ def normalize_accumulated_tags(tags):
         if isinstance(vals, str):
             vals = [vals]
         fixed[key] = dedup_list([str(v).strip() for v in vals if str(v).strip()])
+
     return fixed
 
 
 def merge_tags(base, new):
     merged = normalize_accumulated_tags(base)
     new = normalize_accumulated_tags(new)
+
     for key, vals in new.items():
         for value in vals:
             if value not in merged[key]:
                 merged[key].append(value)
+
     return merged
 
 
 def parse_color_field(color_raw):
     if color_raw is None:
         return []
+
     if isinstance(color_raw, list):
         return [str(c).strip().lower() for c in color_raw if str(c).strip()]
+
     if isinstance(color_raw, str):
         color_raw = color_raw.strip()
         if not color_raw:
             return []
+
         try:
             parsed = json.loads(color_raw)
             if isinstance(parsed, list):
                 return [str(c).strip().lower() for c in parsed if str(c).strip()]
         except Exception:
             pass
+
         return [color_raw.lower()]
+
     return [str(color_raw).strip().lower()]
 
 
@@ -258,6 +347,22 @@ def color_list_to_text(color_value):
         return " ".join(str(c) for c in color_value if str(c).strip())
     return str(color_value)
 
+
+def get_table_columns(cursor, table_name):
+    cursor.execute(f"SHOW COLUMNS FROM `{table_name}`")
+    return [row["Field"] for row in cursor.fetchall()]
+
+
+def pick_first_existing(columns, candidates):
+    for c in candidates:
+        if c in columns:
+            return c
+    return None
+
+
+# ─────────────────────────────────────────────
+# 태그 추출
+# ─────────────────────────────────────────────
 
 def extract_tags_rule_based(user_text):
     tags = empty_tags()
@@ -282,76 +387,144 @@ def extract_tags_rule_based(user_text):
         for value in allowed_values:
             if value.replace(" ", "") in compact and value not in tags[field]:
                 tags[field].append(value)
+
     return tags
 
 
 def extract_tags_by_evidence(user_text):
     tags = empty_tags()
     compact = str(user_text).replace(" ", "")
+
     for field, tag_map in TAG_EVIDENCE_KEYWORDS.items():
         for tag, keywords in tag_map.items():
             if any(keyword.replace(" ", "") in compact for keyword in keywords):
                 if tag not in tags[field]:
                     tags[field].append(tag)
+
     return tags
 
 
 def extract_hybrid_tags(user_text, accumulated_tags):
     rule_tags = extract_tags_rule_based(user_text)
     evidence_tags = extract_tags_by_evidence(user_text)
+
     new_tags = merge_tags(rule_tags, evidence_tags)
     final_tags = merge_tags(accumulated_tags, new_tags)
+
     print(f"  규칙 기반 태그: {rule_tags}")
     print(f"  근거 기반 태그: {evidence_tags}")
     print(f"  최종 누적 태그: {final_tags}")
+
     return final_tags
 
 
+# ─────────────────────────────────────────────
+# DB 로드: llm_shoes만 사용
+# ─────────────────────────────────────────────
+
 def load_inventory_from_db():
+    """
+    shoes_inventory JOIN 없이 llm_shoes 테이블만 사용한다.
+    재고 정보는 사용하지 않고 stock=1로 고정한다.
+    """
     inventory = []
     conn = pymysql.connect(**DB_CONFIG)
+
     total_count = 0
+
     try:
         with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            columns = get_table_columns(cursor, SHOES_TABLE_NAME)
+            column_set = set(columns)
+
+            id_col = pick_first_existing(column_set, ["id"])
+            shoe_id_col = pick_first_existing(column_set, ["shoe_id", "ssid", "product_id", "item_id"])
+            brand_col = pick_first_existing(column_set, ["brand"])
+            model_col = pick_first_existing(column_set, ["model", "name", "shoe_name"])
+            color_col = pick_first_existing(column_set, ["colors", "color"])
+            image_col = pick_first_existing(column_set, ["image_url", "image", "img_url"])
+            price_col = pick_first_existing(column_set, ["price"])
+            tags_col = pick_first_existing(column_set, ["tags", "tag"])
+
+            if not brand_col or not model_col:
+                raise ValueError(
+                    f"{SHOES_TABLE_NAME} 테이블에 brand/model 컬럼이 필요합니다. 현재 컬럼: {columns}"
+                )
+
+            select_parts = []
+
+            if id_col:
+                select_parts.append(f"`{id_col}` AS id")
+            else:
+                select_parts.append("NULL AS id")
+
+            if shoe_id_col:
+                select_parts.append(f"`{shoe_id_col}` AS shoe_id")
+            elif id_col:
+                select_parts.append(f"`{id_col}` AS shoe_id")
+            else:
+                select_parts.append("NULL AS shoe_id")
+
+            select_parts.append(f"`{brand_col}` AS brand")
+            select_parts.append(f"`{model_col}` AS model")
+
+            if color_col:
+                select_parts.append(f"`{color_col}` AS colors")
+            else:
+                select_parts.append("NULL AS colors")
+
+            if image_col:
+                select_parts.append(f"`{image_col}` AS image_url")
+            else:
+                select_parts.append("'' AS image_url")
+
+            if price_col:
+                select_parts.append(f"`{price_col}` AS price")
+            else:
+                select_parts.append("0 AS price")
+
+            if tags_col:
+                select_parts.append(f"`{tags_col}` AS tags")
+            else:
+                select_parts.append("'' AS tags")
+
             cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{SHOES_TABLE_NAME}`")
             total_count = int(cursor.fetchone()["cnt"] or 0)
 
-            cursor.execute(f"""
-                SELECT 
-                    s.id,
-                    s.ssid AS shoe_id,
-                    s.brand,
-                    s.model,
-                    s.color AS colors,
-                    s.image_url,
-                    s.price,
-                    s.tags,
-                    SUM(si.stock) AS stock
-                FROM `{SHOES_TABLE_NAME}` s
-                JOIN `{INVENTORY_TABLE_NAME}` si
-                    ON s.ssid = si.shoe_id
-                WHERE si.stock > 0
-                GROUP BY 
-                    s.id, s.ssid, s.brand, s.model,
-                    s.color, s.image_url, s.price, s.tags
-            """)
+            sql = f"""
+                SELECT
+                    {", ".join(select_parts)}
+                FROM `{SHOES_TABLE_NAME}`
+            """
+
+            cursor.execute(sql)
             rows = cursor.fetchall()
+
             for row in rows:
+                color_raw = row.get("colors")
+                color_parsed = parse_color_field(color_raw)
+
                 inventory.append({
                     "id": row.get("id"),
                     "shoe_id": row.get("shoe_id"),
                     "brand": row.get("brand") or "",
                     "model": row.get("model") or "",
-                    "color": parse_color_field(row.get("colors")),
+                    "color": color_parsed,
                     "image_url": row.get("image_url") or "",
                     "price": int(row.get("price") or 0),
                     "tags": row.get("tags") or "",
-                    "stock": int(row.get("stock") or 0),
+                    "stock": 1,
                 })
+
     finally:
         conn.close()
+
     return inventory, total_count
 
+
+# ─────────────────────────────────────────────
+# 모델명/추천 로직
+# ─────────────────────────────────────────────
 
 def find_best_model(user_text, inventory, threshold=0.62):
     clean_input = normalize_model_text(user_text)
@@ -362,11 +535,18 @@ def find_best_model(user_text, inventory, threshold=0.62):
             return official
 
     all_models = list(set([shoe["model"] for shoe in inventory if shoe.get("model")]))
+
     input_tokens = clean_input.split()
     input_codes = extract_codes(clean_input)
     input_jamo = decompose_hangul(compact_input)
-    best_model, best_score = None, 0.0
-    weak_tokens = {"nike", "adidas", "new", "balance", "air", "zoom", "og", "low", "mid", "black", "white", "gel", "wave"}
+
+    best_model = None
+    best_score = 0.0
+
+    weak_tokens = {
+        "nike", "adidas", "new", "balance", "air", "zoom",
+        "og", "low", "mid", "black", "white", "gel", "wave"
+    }
 
     for model in all_models:
         model_norm = normalize_model_text(model)
@@ -374,11 +554,13 @@ def find_best_model(user_text, inventory, threshold=0.62):
         model_tokens = model_norm.split()
         model_codes = extract_codes(model_norm)
         model_jamo = decompose_hangul(model_compact)
+
         score = 0.0
 
         for code in input_codes:
             if code in model_codes:
                 score += 1.0
+
         for ut in input_tokens:
             for mt in model_tokens:
                 if ut == mt:
@@ -391,23 +573,34 @@ def find_best_model(user_text, inventory, threshold=0.62):
                 sim = difflib.SequenceMatcher(None, ut, mt).ratio()
                 best_token_score = max(best_token_score, sim)
             token_sim += best_token_score
+
         if input_tokens:
             token_sim /= len(input_tokens)
 
         score_full = difflib.SequenceMatcher(None, compact_input, model_compact).ratio()
         score_jamo = difflib.SequenceMatcher(None, input_jamo, model_jamo).ratio()
+
         score += max(token_sim, score_full, score_jamo)
 
         if compact_input and (compact_input in model_compact or model_compact in compact_input):
             score += 0.2
-        if score > best_score:
-            best_score, best_model = score, model
 
-    return best_model if best_score >= threshold else None
+        if score > best_score:
+            best_score = score
+            best_model = model
+
+    if best_score >= threshold:
+        return best_model
+
+    return None
 
 
 def extract_brands(user_text):
-    return dedup_list([brand for brand in TAG_SCHEMA["brand"] if brand in user_text])
+    found = []
+    for brand in TAG_SCHEMA["brand"]:
+        if brand in user_text:
+            found.append(brand)
+    return dedup_list(found)
 
 
 def build_db_string(shoe):
@@ -417,20 +610,25 @@ def build_db_string(shoe):
 
 def match_all_filters(shoe, accumulated_tags):
     db_str = build_db_string(shoe)
+
     for field, vals in accumulated_tags.items():
         if not vals:
             continue
+
         if not any(str(v).lower().replace(" ", "") in db_str for v in vals):
             return False
+
     return True
 
 
 def score_shoe(shoe, accumulated_tags, target_model, mentioned_brands, user_text):
     score = 0
     db_str = build_db_string(shoe)
+
     for field, vals in accumulated_tags.items():
         if not vals:
             continue
+
         weight = WEIGHTS.get(field, 3)
         for v in vals:
             if str(v).lower().replace(" ", "") in db_str:
@@ -438,6 +636,7 @@ def score_shoe(shoe, accumulated_tags, target_model, mentioned_brands, user_text
 
     if target_model and normalize_text(target_model) == normalize_text(shoe.get("model", "")):
         score += 100
+
     for brand in mentioned_brands:
         if normalize_text(brand) in normalize_text(shoe.get("brand", "")):
             score += 30
@@ -448,9 +647,11 @@ def score_shoe(shoe, accumulated_tags, target_model, mentioned_brands, user_text
     if user_compact and user_compact in normalize_text(shoe.get("brand", "")):
         score += 15
 
-    for color in accumulated_tags.get("color", []):
+    target_colors = accumulated_tags.get("color", [])
+    for color in target_colors:
         if any(normalize_text(color) in normalize_text(col) for col in shoe.get("color", [])):
             score += 20
+
     return score
 
 
@@ -459,13 +660,17 @@ def get_recommendations(user_text, accumulated_tags, inventory):
     target_model = find_best_model(user_text, inventory, threshold=0.62)
 
     if target_model:
-        candidates = [s for s in inventory if normalize_text(s.get("model", "")) == normalize_text(target_model)]
+        candidates = [
+            s for s in inventory
+            if normalize_text(s.get("model", "")) == normalize_text(target_model)
+        ]
     else:
         candidates = [s for s in inventory if match_all_filters(s, accumulated_tags)]
 
     ranked = []
     for shoe in candidates:
         score = score_shoe(shoe, accumulated_tags, target_model, mentioned_brands, user_text)
+
         if score > 0 or target_model or (not any(accumulated_tags.values()) and not target_model):
             ranked.append({
                 "id": shoe.get("id"),
@@ -474,16 +679,26 @@ def get_recommendations(user_text, accumulated_tags, inventory):
                 "model": shoe.get("model"),
                 "colors": shoe.get("color"),
                 "price": int(shoe.get("price") or 0),
-                "stock": int(shoe.get("stock") or 0),
+                "stock": int(shoe.get("stock") or 1),
                 "image_url": shoe.get("image_url"),
                 "tags": shoe.get("tags"),
                 "score": score,
             })
 
-    ranked = sorted(ranked, key=lambda x: (-x["score"], x["price"] if isinstance(x["price"], int) else 999999999))
-    top_pool = ranked[:10]
-    return random.sample(top_pool, min(TOP_K, len(top_pool))), target_model, mentioned_brands
+    ranked = sorted(
+        ranked,
+        key=lambda x: (-x["score"], x["price"] if isinstance(x["price"], int) else 999999999)
+    )
 
+    top_pool = ranked[:10]
+    random_results = random.sample(top_pool, min(TOP_K, len(top_pool)))
+
+    return random_results, target_model, mentioned_brands
+
+
+# ─────────────────────────────────────────────
+# TCP 서버 핸들러
+# ─────────────────────────────────────────────
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     addr = writer.get_extra_info("peername")
@@ -511,15 +726,24 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         inventory, total_count = load_inventory_from_db()
         print(f"\n  STEP 2 │ DB 로드")
         print(f"  전체 상품 수: {total_count}")
-        print(f"  재고 있는 inventory 개수: {len(inventory)}")
+        print(f"  llm_shoes 로드 상품 수: {len(inventory)}")
         print(f"  ⏱ DB 로드 시간: {time.time() - db_start:.2f}초")
 
         print("\n[DEBUG] inventory brand/model 샘플")
         for s in inventory[:10]:
-            print(f"brand={repr(s['brand'])}, model={repr(s['model'])}, color={repr(s['color'])}, stock={repr(s.get('stock'))}")
+            print(
+                f"brand={repr(s['brand'])}, "
+                f"model={repr(s['model'])}, "
+                f"color={repr(s['color'])}, "
+                f"stock={repr(s.get('stock'))}"
+            )
 
         rank_start = time.time()
-        ranked, target_model, mentioned_brands = get_recommendations(user_text, accumulated_tags, inventory)
+        ranked, target_model, mentioned_brands = get_recommendations(
+            user_text,
+            accumulated_tags,
+            inventory
+        )
         print(f"  ⏱ 추천 계산 시간: {time.time() - rank_start:.2f}초")
 
         print(f"\n  STEP 3 │ 분석 결과")
@@ -536,7 +760,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 print(f"  │     모델명 : {item['model']}")
                 print(f"  │     색상   : {', '.join(item['colors']) if isinstance(item['colors'], list) else item['colors']}")
                 print(f"  │     가격   : {item['price']:,}원")
-                print(f"  │     재고   : {item.get('stock', 0)}")
+                print(f"  │     재고   : {item.get('stock', 1)}")
                 print(f"  │     점수   : {item['score']}")
             print("  └─────────────────────────────────────────")
         else:
@@ -553,24 +777,33 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     "total_count": total_count,
                     "filtered_count": len(inventory),
                     "shoes_table": SHOES_TABLE_NAME,
-                    "inventory_table": INVENTORY_TABLE_NAME,
+                    "inventory_table": None,
+                    "stock_mode": "ignored_llm_shoes_only",
                 },
             },
         }
+
         if not ranked:
             response["message"] = "매칭 상품 없음"
 
         resp_bytes = json.dumps(response, ensure_ascii=False).encode("utf-8")
+
         writer.write(struct.pack("!I", len(resp_bytes)))
         writer.write(resp_bytes)
         await writer.drain()
+
         print(f"m_llm → backend  응답 전송 완료 ({len(resp_bytes)} bytes)")
 
     except asyncio.IncompleteReadError:
         print(f"연결 끊김: {addr}")
     except Exception as e:
         print(f"오류: {type(e).__name__}: {e}")
-        err = json.dumps({"error": f"{type(e).__name__}: {str(e)}"}, ensure_ascii=False).encode("utf-8")
+        err = json.dumps(
+            {
+                "error": f"{type(e).__name__}: {str(e)}"
+            },
+            ensure_ascii=False
+        ).encode("utf-8")
         try:
             writer.write(struct.pack("!I", len(err)))
             writer.write(err)
@@ -583,28 +816,32 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         print(f"╚══ backend 연결 종료: {addr} ══╝\n")
 
 
+# ─────────────────────────────────────────────
+# main
+# ─────────────────────────────────────────────
+
 async def main():
     print("═══ M_LLM Hybrid 서버 시작 준비 ═══")
+    print("※ shoes_inventory JOIN 없이 llm_shoes 테이블만 사용합니다.")
+
     try:
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM `{SHOES_TABLE_NAME}`")
             shoes_count = cur.fetchone()[0]
-            cur.execute(f"SELECT COUNT(*) FROM `{INVENTORY_TABLE_NAME}`")
-            inventory_count = cur.fetchone()[0]
-            cur.execute(f"SELECT COUNT(*) FROM `{INVENTORY_TABLE_NAME}` WHERE `stock` > 0")
-            stock_count = cur.fetchone()[0]
+
             print(f" ✅ DB 연결 성공 ({DB_CONFIG['host']}/{DB_CONFIG['database']})")
             print(f" ✅ {SHOES_TABLE_NAME} 테이블 행 수: {shoes_count}")
-            print(f" ✅ {INVENTORY_TABLE_NAME} 테이블 행 수: {inventory_count}")
-            print(f" ✅ {INVENTORY_TABLE_NAME}.stock > 0 행 수: {stock_count}")
+            print(" ✅ shoes_inventory 테이블은 사용하지 않습니다.")
         conn.close()
+
     except Exception as e:
         print(f"DB 연결 실패: {type(e).__name__}: {e}")
         return
 
     server = await asyncio.start_server(handle_client, SERVER_HOST, SERVER_PORT)
     addr = server.sockets[0].getsockname()
+
     print(f"\nTCP 서버 대기 중: {addr[0]}:{addr[1]}")
     print("moosinsa_service.py에서 TCP 요청을 받을 준비 완료\n")
 
