@@ -95,7 +95,7 @@ logger = logging.getLogger("moosinsa_service")
 # ══════════════════════════════════════════════════════════════
 
 # ── M_LLM 서버 (TCP) ─────────────────────────────────────────
-# MLLM_HOST = "192.168.1.120"                       #.env로 이동 
+# MLLM_HOST = "192.168.1.121"                       #.env로 이동 
 # MLLM_PORT = 9000
 
 # ── YOLO 서버 (UDP 송신) ──────────────────────────────────────
@@ -721,15 +721,15 @@ class ScenarioOrchestrator:
             logger.warning(f"[STEP2] YOLO 통신 오류 (검색 계속 진행): {e}")
 
         # ── STEP 3: M_LLM 상품 필터링 ───────────────────────
-        new_tags = extract_tags(req.keyword)
-        new_tags = convert_color_tags_to_english(new_tags)
-        merged_tags = merge_tags(req.accumulated_tags, new_tags)
+        # new_tags = extract_tags(req.keyword)
+        # new_tags = convert_color_tags_to_english(new_tags)
+        # merged_tags = merge_tags(req.accumulated_tags, new_tags)
         logger.info(f"[STEP3] 추출된 태그: {new_tags}, 누적 태그: {merged_tags}")
 
         try:
             result = await self.llm.request_filtering(
                 user_text=req.keyword,
-                accumulated_tags=merged_tags,
+                accumulated_tags=req.accumulated_tags,
             )
             
             if result is None:
