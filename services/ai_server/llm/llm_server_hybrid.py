@@ -6,6 +6,8 @@ import difflib
 import pymysql
 import random
 import time
+import torch
+from transformers import AutoTokenizer, AutoModelForCasualLM, BitsAndBytesConfig
 
 # ─────────────────────────────────────────────
 # MySQL 접속 설정
@@ -24,6 +26,11 @@ SHOES_TABLE_NAME = "llm_shoes"
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 9000
 TOP_K = 3
+
+MODEL_ID = "google/gemma-2-2b-it"
+
+_tokenizer = None
+_llm_model = None
 
 # ─────────────────────────────────────────────
 # 태그 스키마
@@ -409,16 +416,216 @@ def extract_tags_by_evidence(user_text):
 
     return tags
 
+def load_llm_model():
+    global _tokenizer, _llm_model
+
+    if _tokenizer is not None and _llm_model is not None:
+        return _tokenizer, _llm_model
+
+    print("⏳ LLM 모델 로딩 중...")
+
+    quant_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4"
+    )
+
+    _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    _llm_model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        device_map="auto",
+        quantization_config=quant_config
+    )
+
+    print("✅ LLM 모델 로딩 완료")
+    return _tokenizer, _llm_model
+
+
+def detect_unmatched_terms(user_text, rule_tags):
+    compact = str(user_text).replace(" ", "")
+    matched_words = []
+
+    for field, vals in rule_tags.items():
+        for v in vals:
+            if str(v) in user_text or str(v).replace(" ", "") in compact:
+                matched_words.append(str(v))
+
+    # 색상 원문도 제거
+    for raw in COLOR_SYNONYMS.keys():
+        if raw.replace(" ", "") in compact:
+            matched_words.append(raw)
+
+    # 브랜드 원문도 제거
+    for brand in TAG_SCHEMA["brand"]:
+        if brand in user_text:
+            matched_words.append(brand)
+
+    # 룰 동의어 원문도 제거
+    for mapping in RULE_SYNONYMS.values():
+        for raw in mapping.keys():
+            if raw.replace(" ", "") in compact:
+                matched_words.append(raw)
+
+    cleaned = user_text
+    for w in sorted(set(matched_words), key=len, reverse=True):
+        cleaned = cleaned.replace(w, " ")
+
+    # 일반 불용어 제거
+    stopwords = [
+        "신발", "운동화", "추천", "찾아줘", "찾아", "주세요",
+        "좀", "하나", "거", "것", "용", "신는", "신을"
+    ]
+
+    terms = []
+    for token in cleaned.split():
+        token = token.strip()
+        if not token:
+            continue
+        if token in stopwords:
+            continue
+        if len(token) <= 1:
+            continue
+        terms.append(token)
+
+    return terms
+
+
+def extract_tags_with_llm(text):
+    tokenizer, model = load_llm_model()
+
+    system_prompt = f"""
+너는 신발 검색 태그 추출기다.
+
+사용자 표현에서 직접 의미가 드러나는 태그만 추출한다.
+브랜드 이미지, 일반 상식, 제품 이미지, 추측으로 태그를 추가하지 마라.
+
+허용되는 의미 기반 추론:
+- "뛰는", "달리는", "조깅", "마라톤" → activity: ["러닝"]
+- "비 오는 날", "젖는", "물 안 스며드는", "장마철" → feature: ["방수"]
+- "편한", "오래 걸어도 안 아픈", "안 피곤한" → feature: ["편안함"]
+- "푹신한", "충격 흡수", "발바닥 부담 적은" → feature: ["쿠션감"]
+- "안 미끄러운", "접지력 좋은" → feature: ["미끄럼 방지"]
+- "발 안 시린", "따뜻한" → feature: ["보온성"]
+- "시원한", "땀 덜 차는", "통풍 잘 되는" → feature: ["통기성"]
+- "키 커 보이는", "키높이" → feature: ["키높이"]
+- "가볍게 신는", "무겁지 않은" → feature: ["가벼움"]
+
+금지:
+- "운동화" 단독으로 activity를 추론하지 마라.
+- 브랜드명만 보고 style, feature를 추가하지 마라.
+- "나이키"만 보고 "힙한"을 추가하지 마라.
+- "러닝"만 보고 "쿠션감"을 자동 추가하지 마라.
+- style 태그는 사용자가 직접 스타일 표현을 말한 경우에만 추가한다.
+
+출력은 JSON만 한다.
+스키마:
+{json.dumps(TAG_SCHEMA, ensure_ascii=False)}
+"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": text}
+    ]
+
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=180,
+            do_sample=False
+        )
+
+    generated = tokenizer.decode(
+        outputs[0][inputs["input_ids"].shape[1]:],
+        skip_special_tokens=True
+    ).strip()
+
+    match = re.search(r"\{[\s\S]*\}", generated)
+    parsed = {}
+
+    if match:
+        try:
+            parsed = json.loads(match.group())
+        except Exception:
+            parsed = {}
+
+    final = empty_tags()
+
+    for field, allowed_values in TAG_SCHEMA.items():
+        vals = parsed.get(field, [])
+        if vals is None:
+            vals = []
+        if isinstance(vals, str):
+            vals = [vals]
+
+        for v in vals:
+            if v in allowed_values and v not in final[field]:
+                final[field].append(v)
+
+    return final
+
+
+def filter_llm_tags_by_evidence(llm_tags, evidence_text):
+    filtered = empty_tags()
+    compact = str(evidence_text).replace(" ", "")
+
+    for field, tag_map in TAG_EVIDENCE_KEYWORDS.items():
+        for tag, keywords in tag_map.items():
+            if tag in llm_tags.get(field, []):
+                if any(keyword.replace(" ", "") in compact for keyword in keywords):
+                    filtered[field].append(tag)
+
+    # color / brand는 LLM fallback에서는 보통 받지 않음
+    # 필요하면 직접 언급된 경우만 허용
+    for color in llm_tags.get("color", []):
+        if color in compact:
+            filtered["color"].append(color)
+
+    for brand in llm_tags.get("brand", []):
+        if brand in evidence_text:
+            filtered["brand"].append(brand)
+
+    return filtered
 
 def extract_hybrid_tags(user_text, accumulated_tags):
+    # 1차: 규칙 기반
     rule_tags = extract_tags_rule_based(user_text)
-    evidence_tags = extract_tags_by_evidence(user_text)
 
-    new_tags = merge_tags(rule_tags, evidence_tags)
-    final_tags = merge_tags(accumulated_tags, new_tags)
+    # 규칙 기반으로 매칭 안 된 표현 찾기
+    unmatched_terms = detect_unmatched_terms(user_text, rule_tags)
 
     print(f"  규칙 기반 태그: {rule_tags}")
-    print(f"  근거 기반 태그: {evidence_tags}")
+    print(f"  태그 미매칭 표현: {unmatched_terms}")
+
+    # 2차: unmatched 있을 때만 LLM 호출
+    if unmatched_terms:
+        print("  → 미매칭 표현이 있어 LLM 태그 추출 실행")
+
+        llm_tags = extract_tags_with_llm(" ".join(unmatched_terms))
+
+        # hallucination 방지용 evidence 검증
+        llm_tags = filter_llm_tags_by_evidence(
+            llm_tags,
+            " ".join(unmatched_terms)
+        )
+
+        print(f"  LLM 추출 태그: {llm_tags}")
+
+        new_tags = merge_tags(rule_tags, llm_tags)
+
+    else:
+        llm_tags = empty_tags()
+        new_tags = rule_tags
+
+    final_tags = merge_tags(accumulated_tags, new_tags)
+
     print(f"  최종 누적 태그: {final_tags}")
 
     return final_tags
@@ -730,7 +937,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         print(f'  user_text       : "{user_text}"')
         print(f"  incoming_tags   : {incoming_tags}")
 
-        accumulated_tags = extract_hybrid_tags(user_text, accumulated_tags)
+        accumulated_tags = extract_hybrid_tags_with_llm(user_text, accumulated_tags)
 
         db_start = time.time()
         inventory, total_count = load_inventory_from_db()
