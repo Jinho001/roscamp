@@ -212,8 +212,12 @@ class SearchResponse(BaseModel):
 # ══════════════════════════════════════════════════════════════
 
 # M_LLM TAG_SCHEMA 키 목록 (llm_server_2.py 와 동일, accumulated_tags 초기화에 사용)
+#TAG_SCHEMA_KEYS = [
+#    "activity", "style", "feature", "colors",
+#    "brand", "season_weather", "price", "target",
+#]
 TAG_SCHEMA_KEYS = [
-    "activity", "style", "feature", "colors",
+    "activity", "style", "feature", "color",
     "brand", "season_weather", "price", "target",
 ]
 
@@ -1052,9 +1056,9 @@ async def endpoint_health():
     return {
         "status"          : "ok",
         "mllm_connected"  : mllm_ok,
-        "mllm_host"       : f"{os.getenv("MLLM_HOST")}:{os.getenv("MLLM_PORT")}",
+        "mllm_host" : f"{os.getenv("MLLM_HOST")}:{os.getenv("MLLM_PORT")}",
         "yolo_result_port": os.getenv('YOLO_RESULT_LISTEN_PORT'),
-        "yolo_server"     : f"{os.getenv("YOLO_SERVER_IP")}:{os.getenv("YOLO_SERVER_PORT")}",
+        "yolo_server" : f"{os.getenv("YOLO_SERVER_IP")}:{os.getenv("YOLO_SERVER_PORT")}",
     }
 
 
