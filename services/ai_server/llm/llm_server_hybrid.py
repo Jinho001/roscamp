@@ -7,7 +7,7 @@ import pymysql
 import random
 import time
 import torch
-from transformers import AutoTokenizer, AutoModelForCasualLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 # ─────────────────────────────────────────────
 # MySQL 접속 설정
