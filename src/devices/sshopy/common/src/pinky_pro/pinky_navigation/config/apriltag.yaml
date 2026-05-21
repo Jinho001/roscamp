@@ -1,0 +1,17 @@
+apriltag_ros:
+  ros__parameters:
+    tag_family: "tag36h11"
+    tag_threads: 2
+    tag_decimate: 1.0
+    tag_blur: 0.0
+    tag_refine_edges: 1
+    tag_debug: 0
+    
+    # 도킹 스테이션별 태그 정의
+    standalone_tags:
+      - id: 0
+        size: 0.10  # 10cm 태그
+        name: "frontjet_dock"
+      - id: 1
+        size: 0.10
+        name: "warejet_dock"
