@@ -142,7 +142,7 @@ class MotionController:
             self._mc.send_coords(approach, _PICK_SPEED)
             if not self._wait_moving():
                 return False
-            print(f"[MotionController] Approach 완료", self.get_flange_coords)
+            print(f"[MotionController] Approach 완료", self._mc.get_coords())
             print(f"[MotionController] Target: {target}")
             self._mc.send_coords(target, _PICK_SPEED)
             if not self._wait_moving():
