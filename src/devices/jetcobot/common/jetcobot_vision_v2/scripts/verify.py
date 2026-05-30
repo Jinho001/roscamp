@@ -330,16 +330,25 @@ def main():
             print(f"{FAIL} --pick은 --robot 플래그와 함께 사용해야 합니다.")
         else:
             pick_offset = profile.get('pick_offset_mm', [0.0, 0.0, 0.0])
-            pt = transformer.pixel_to_base(obb['cx'], obb['cy'], z_surface_mm)
+            # pick_offset [x, y]를 픽셀로 역산해 cx, cy에 적용 (각도 무관 보정)
+            dpx = transformer.base_offset_to_pixel(pick_offset[0], pick_offset[1], z_surface_mm)
+            if dpx is not None:
+                cx_corr = obb['cx'] + dpx[0]
+                cy_corr = obb['cy'] + dpx[1]
+            else:
+                cx_corr, cy_corr = obb['cx'], obb['cy']
+            pt = transformer.pixel_to_base(cx_corr, cy_corr, z_surface_mm)
+            pt_raw = transformer.pixel_to_base(obb['cx'], obb['cy'], z_surface_mm)
             if pt is None:
                 print(f"{FAIL} 좌표 변환 실패 — pick 중단")
             else:
                 yaw  = transformer.theta_to_yaw(obb['theta'])
-                x_mm = pt[0] + pick_offset[0]
-                y_mm = pt[1] + pick_offset[1]
+                x_mm = pt[0]
+                y_mm = pt[1]
                 z_mm = z_surface_mm + pick_offset[2]
                 print(f"\n╔══ Pick 동작 ══════════════════════════════════════════════════╗")
-                print(f"  변환 좌표:  x={pt[0]:.2f}  y={pt[1]:.2f}  z={z_surface_mm:.1f}mm")
+                print(f"  변환 좌표:  x={pt_raw[0]:.2f}  y={pt_raw[1]:.2f}  z={z_surface_mm:.1f}mm")
+                print(f"  픽셀 보정:  dcx={dpx[0]:.1f}px  dcy={dpx[1]:.1f}px" if dpx else "  픽셀 보정: 실패")
                 print(f"  pick_offset: {pick_offset}")
                 print(f"  최종 목표:  x={x_mm:.2f}  y={y_mm:.2f}  z={z_mm:.1f}mm  yaw={yaw:.1f}°")
                 print(f"  실행 중...")

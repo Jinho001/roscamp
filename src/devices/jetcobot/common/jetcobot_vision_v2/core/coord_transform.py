@@ -97,6 +97,38 @@ class CoordTransformer:
         pt = origin + t * ray_b
         return pt[0] * 1000.0, pt[1] * 1000.0, pt[2] * 1000.0
 
+    def base_offset_to_pixel(self, dx_mm: float, dy_mm: float,
+                             z_surface_mm: float) -> tuple[float, float] | None:
+        """
+        base_link 기준 오프셋 (dx, dy) mm → 픽셀 보정량 (dcx, dcy).
+        pick_offset을 카메라 좌표계 기준으로 변환할 때 사용.
+        """
+        if self._T_base2cam is None:
+            return None
+
+        R = self._T_base2cam[:3, :3]
+        origin = self._T_base2cam[:3, 3]
+        z_surface_m = z_surface_mm / 1000.0
+
+        def _project(x_mm, y_mm):
+            pt_b = np.array([x_mm / 1000.0, y_mm / 1000.0, z_surface_m])
+            pt_c = R.T @ (pt_b - origin)
+            if abs(pt_c[2]) < 1e-9:
+                return None
+            u = self._K[0, 0] * pt_c[0] / pt_c[2] + self._K[0, 2]
+            v = self._K[1, 1] * pt_c[1] / pt_c[2] + self._K[1, 2]
+            return u, v
+
+        # 기준점 픽셀
+        base_pt = self.pixel_to_base(self._K[0, 2], self._K[1, 2], z_surface_mm)
+        if base_pt is None:
+            return None
+        p0 = _project(base_pt[0], base_pt[1])
+        p1 = _project(base_pt[0] + dx_mm, base_pt[1] + dy_mm)
+        if p0 is None or p1 is None:
+            return None
+        return p1[0] - p0[0], p1[1] - p0[1]
+
     def theta_to_yaw(self, theta_cam: float) -> float | None:
         """
         카메라 OBB 장축 각도 (rad) → base_link yaw (deg).
