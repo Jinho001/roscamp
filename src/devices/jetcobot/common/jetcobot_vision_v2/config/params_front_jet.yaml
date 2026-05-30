@@ -54,7 +54,7 @@ profiles:
     # 파지 자세
     grasp_roll: 180.0
     grasp_pitch: -5.0
-    grasp_yaw_offset: -179.0
+    grasp_yaw_offset: 0.0
     # approach 높이 여유 (mm)
     approach_z_offset_mm: 20.0
 
