@@ -261,7 +261,7 @@ def main():
             sys.exit(1)
         tcp_off = mot_cfg.get('tcp_offset', [0, 0, 0])
         # TCP → flange 역산 (회전 없는 순수 평행이동 가정)
-        import math, numpy as np
+        import numpy as np
         def euler_to_R(rx, ry, rz):
             rx, ry, rz = map(math.radians, [rx, ry, rz])
             Rz = np.array([[math.cos(rz),-math.sin(rz),0],[math.sin(rz),math.cos(rz),0],[0,0,1]])
