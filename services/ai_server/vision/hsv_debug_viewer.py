@@ -108,14 +108,14 @@ def _run_pipeline(img: np.ndarray) -> dict:
         w,  h  = float(rect[1][0]), float(rect[1][1])
         angle  = rect[2]
 
-        size_ok = (MIN_W <= w <= MAX_W and MIN_H <= h <= MAX_H) or \
-                  (MIN_W <= h <= MAX_W and MIN_H <= w <= MAX_H)
-        if not size_ok:
-            box = cv2.boxPoints(((cx, cy), (w, h), angle)).astype(np.int32)
-            cv2.polylines(filter_img, [box], True, (0, 200, 200), 2)
-            _put_text_bg(filter_img, f"size  w{w:.0f}xh{h:.0f}",
-                         (int(cx) + 6, int(cy) - 10), 0.6, (0, 200, 200))
-            continue
+        # size_ok = (MIN_W <= w <= MAX_W and MIN_H <= h <= MAX_H) or \
+        #           (MIN_W <= h <= MAX_W and MIN_H <= w <= MAX_H)
+        # if not size_ok:
+        #     box = cv2.boxPoints(((cx, cy), (w, h), angle)).astype(np.int32)
+        #     cv2.polylines(filter_img, [box], True, (0, 200, 200), 2)
+        #     _put_text_bg(filter_img, f"size  w{w:.0f}xh{h:.0f}",
+        #                  (int(cx) + 6, int(cy) - 10), 0.6, (0, 200, 200))
+        #     continue
 
         if w < h:
             w, h = h, w
@@ -127,20 +127,20 @@ def _run_pipeline(img: np.ndarray) -> dict:
         hull_area = cv2.contourArea(hull)
         solidity  = min(area / hull_area, 1.0) if hull_area > 0 else 0.0
 
-        if solidity < MIN_SOLIDITY:
-            box = cv2.boxPoints(((cx, cy), (w, h), angle)).astype(np.int32)
-            cv2.polylines(filter_img, [box], True, (0, 0, 255), 2)
-            _put_text_bg(filter_img, f"S={solidity:.2f} (< {MIN_SOLIDITY})",
-                         (int(cx) + 6, int(cy) - 10), 0.65, (0, 80, 255))
-            continue
+        # if solidity < MIN_SOLIDITY:
+        #     box = cv2.boxPoints(((cx, cy), (w, h), angle)).astype(np.int32)
+        #     cv2.polylines(filter_img, [box], True, (0, 0, 255), 2)
+        #     _put_text_bg(filter_img, f"S={solidity:.2f} (< {MIN_SOLIDITY})",
+        #                  (int(cx) + 6, int(cy) - 10), 0.65, (0, 80, 255))
+        #     continue
 
         aspect = h / w if w > 0 else 0.0
-        if aspect < MIN_ASPECT_RATIO:
-            box = cv2.boxPoints(((cx, cy), (w, h), angle)).astype(np.int32)
-            cv2.polylines(filter_img, [box], True, (255, 80, 0), 2)
-            _put_text_bg(filter_img, f"A={aspect:.2f} (< {MIN_ASPECT_RATIO})",
-                         (int(cx) + 6, int(cy) - 10), 0.65, (255, 120, 0))
-            continue
+        # if aspect < MIN_ASPECT_RATIO:
+        #     box = cv2.boxPoints(((cx, cy), (w, h), angle)).astype(np.int32)
+        #     cv2.polylines(filter_img, [box], True, (255, 80, 0), 2)
+        #     _put_text_bg(filter_img, f"A={aspect:.2f} (< {MIN_ASPECT_RATIO})",
+        #                  (int(cx) + 6, int(cy) - 10), 0.65, (255, 120, 0))
+        #     continue
 
         # 최종 통과
         box = cv2.boxPoints(((cx, cy), (w, h), angle)).astype(np.int32)
@@ -160,6 +160,8 @@ def _run_pipeline(img: np.ndarray) -> dict:
 
     return {
         "original":   original,
+        "clahe":      img_clahe,
+        "clahe_l":    lab[:, :, 0],
         "hsv_mask":   hsv_mask,
         "morph_mask": morph_mask,
         "result_img": result_img,
@@ -232,9 +234,11 @@ def _build_display(panels: dict, win_w: int, win_h: int,
 def main() -> None:
     global HSV_LOWER, HSV_UPPER, MIN_AREA, MAX_AREA
     global MIN_W, MAX_W, MIN_H, MAX_H, MORPH_K, MIN_SOLIDITY, MIN_ASPECT_RATIO
-    global right_mode_idx
+    global right_mode_idx, _latest_frame
 
     parser = argparse.ArgumentParser(description="HSV 필터 디버그 뷰어")
+    parser.add_argument("--image",            type=str,   default=None,
+                        help="정적 이미지 파일 경로 (지정 시 UDP 대신 이 이미지를 사용)")
     parser.add_argument("--udp-port",         type=int,   default=5000,
                         help="UDP 수신 포트 (FrontJet=5000, WareJet=5001)")
     parser.add_argument("--hsv-lower",        type=int,   nargs=3, default=None)
@@ -252,18 +256,56 @@ def main() -> None:
     if args.min_aspect_ratio: MIN_ASPECT_RATIO = args.min_aspect_ratio
     if args.morph_k:          MORPH_K          = args.morph_k
 
-    threading.Thread(target=_udp_receiver, args=(args.udp_port,), daemon=True).start()
+    if args.image:
+        # 정적 이미지 모드: UDP 스트림 없이 파일에서 로드
+        static_img = cv2.imread(args.image)
+        if static_img is None:
+            print(f"[ERROR] 이미지를 불러올 수 없습니다: {args.image}")
+            return
+        # 스트림(640x480)과 동일한 해상도로 리사이즈 → 픽셀 기반 필터 수치 일치
+        static_img = cv2.resize(static_img, (640, 480))
+        with _frame_lock:
+            _latest_frame = static_img
+        print(f"[IMAGE] 정적 이미지 로드 완료 (640x480 리사이즈): {args.image}")
+    else:
+        threading.Thread(target=_udp_receiver, args=(args.udp_port,), daemon=True).start()
 
     cv2.namedWindow("HSV Debug Viewer", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("HSV Debug Viewer", args.width, args.height)
 
+    # ── 실시간 파라미터 튜닝용 트랙바(슬라이더) 창 추가 ──
+    cv2.namedWindow("Trackbars", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Trackbars", 400, 300)
+    
+    def nothing(x): pass
+    cv2.createTrackbar("H_MIN", "Trackbars", int(HSV_LOWER[0]), 179, nothing)
+    cv2.createTrackbar("S_MIN", "Trackbars", int(HSV_LOWER[1]), 255, nothing)
+    cv2.createTrackbar("V_MIN", "Trackbars", int(HSV_LOWER[2]), 255, nothing)
+    cv2.createTrackbar("H_MAX", "Trackbars", int(HSV_UPPER[0]), 179, nothing)
+    cv2.createTrackbar("S_MAX", "Trackbars", int(HSV_UPPER[1]), 255, nothing)
+    cv2.createTrackbar("V_MAX", "Trackbars", int(HSV_UPPER[2]), 255, nothing)
+    cv2.createTrackbar("MORPH_K", "Trackbars", int(MORPH_K), 51, nothing)
+
     print("=" * 60)
-    print("HSV 디버그 뷰어  키: [Tab] 오른쪽 전환  [s] 파라미터  [q] 종료")
+    print("HSV 디버그 뷰어  키: [Tab] 오른쪽 전환  [s] 캡처 및 파라미터 저장  [q] 종료")
+    print(" (Trackbars 창의 슬라이더를 움직여 실시간으로 파라미터를 조정하세요!)")
     print("=" * 60)
 
     fps, frame_count, prev_time = 0.0, 0, time.time()
 
     while True:
+        # 트랙바 값 실시간 반영
+        HSV_LOWER[0] = cv2.getTrackbarPos("H_MIN", "Trackbars")
+        HSV_LOWER[1] = cv2.getTrackbarPos("S_MIN", "Trackbars")
+        HSV_LOWER[2] = cv2.getTrackbarPos("V_MIN", "Trackbars")
+        HSV_UPPER[0] = cv2.getTrackbarPos("H_MAX", "Trackbars")
+        HSV_UPPER[1] = cv2.getTrackbarPos("S_MAX", "Trackbars")
+        HSV_UPPER[2] = cv2.getTrackbarPos("V_MAX", "Trackbars")
+        
+        # 커널 사이즈는 홀수여야 함
+        mk = cv2.getTrackbarPos("MORPH_K", "Trackbars")
+        MORPH_K = mk if mk % 2 != 0 else mk + 1
+        
         with _frame_lock:
             img = _latest_frame.copy() if _latest_frame is not None else None
 
@@ -277,7 +319,27 @@ def main() -> None:
             print(f"\n[파라미터]")
             print(f"  HSV: {HSV_LOWER.tolist()} ~ {HSV_UPPER.tolist()}")
             print(f"  면적: {MIN_AREA}~{MAX_AREA}  크기: {MIN_W}~{MAX_W} x {MIN_H}~{MAX_H}")
-            print(f"  morph_k={MORPH_K}  solidity>={MIN_SOLIDITY}  aspect>={MIN_ASPECT_RATIO}\n")
+            print(f"  morph_k={MORPH_K}  solidity>={MIN_SOLIDITY}  aspect>={MIN_ASPECT_RATIO}")
+
+            if img is not None:
+                import os
+                from datetime import datetime
+                ts = datetime.now().strftime("%H%M%S")
+                out_dir = "presentation_images"
+                os.makedirs(out_dir, exist_ok=True)
+
+                p = _run_pipeline(img)
+                cv2.imwrite(f"{out_dir}/01_raw_{ts}.jpg", p["original"])
+                cv2.imwrite(f"{out_dir}/02_clahe_{ts}.jpg", p["clahe"])
+                cv2.imwrite(f"{out_dir}/02_clahe_L_channel_{ts}.jpg", p["clahe_l"])
+                cv2.imwrite(f"{out_dir}/03_mask_before_morph_{ts}.jpg", p["hsv_mask"])
+                cv2.imwrite(f"{out_dir}/04_mask_after_morph_{ts}.jpg", p["morph_mask"])
+                cv2.imwrite(f"{out_dir}/05_final_obb_{ts}.jpg", p["result_img"])
+
+                curr_display = _build_display(p, args.width, args.height, right_mode_idx, fps)
+                cv2.imwrite(f"{out_dir}/00_debugger_view_{ts}.jpg", curr_display)
+
+                print(f"[SUCCESS] 단계별 이미지 7장 저장 완료: '{out_dir}/*_{ts}.jpg'\n")
 
         if img is None:
             blank = np.zeros((args.height, args.width, 3), dtype=np.uint8)

@@ -205,6 +205,8 @@ def main():
     parser.add_argument("--real-y",   type=float, default=None,  help="[Step B] 상자 실측 y (mm, base_link 기준)")
     parser.add_argument("--expected-yaw", type=float, default=None, help="[Step C] 상자 실제 yaw (deg)")
     parser.add_argument("--save-json", default=None, help="결과 저장 경로 (예: results/verify.json)")
+    parser.add_argument("--robot", action="store_true",
+                        help="로봇 연결 후 실제 flange 좌표로 T_base2cam 갱신 (더 정확)")
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
@@ -229,14 +231,48 @@ def main():
     print(f"  시각    : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 65)
 
-    # observe_pose 기준 T_base2cam 설정 (실제 로봇 없을 때 YAML observe_pose 사용)
+    # T_base2cam 설정: 로봇 연결 시 실제 flange 좌표, 아니면 YAML observe_pose (TCP→flange 역산)
+    mot_cfg = cfg['motion']
     obs = profile.get('observe_pose')
-    if obs:
-        transformer.update_pose(obs)
-        print(f"\n[*] observe_pose 기준 T_base2cam 계산 (카메라 Z: {transformer.camera_z_mm:.1f}mm)")
+
+    if args.robot:
+        print(f"\n[*] 로봇 연결 중: {mot_cfg['port']} @ {mot_cfg['baud']}")
+        motion = MotionController(mot_cfg['port'], mot_cfg['baud'], mot_cfg['tcp_offset'])
+        if not motion.connected:
+            print(f"{FAIL} 로봇 연결 실패")
+            sys.exit(1)
+        print(f"[*] observe_pose로 이동 중...")
+        motion.move_to(obs)
+        import time; time.sleep(0.5)
+        flange = motion.get_flange_coords()
+        if flange is None:
+            print(f"{FAIL} flange 좌표 읽기 실패")
+            sys.exit(1)
+        transformer.update_pose(flange)
+        print(f"[+] flange 좌표: {[round(v,1) for v in flange]}")
+        print(f"[+] 카메라 Z: {transformer.camera_z_mm:.1f}mm")
     else:
-        print(f"\n{FAIL} profile에 observe_pose 없음")
-        sys.exit(1)
+        # YAML observe_pose(TCP)를 flange로 역산해서 사용
+        if not obs:
+            print(f"\n{FAIL} profile에 observe_pose 없음")
+            sys.exit(1)
+        tcp_off = mot_cfg.get('tcp_offset', [0, 0, 0])
+        # TCP → flange 역산 (회전 없는 순수 평행이동 가정)
+        import math, numpy as np
+        def euler_to_R(rx, ry, rz):
+            rx, ry, rz = map(math.radians, [rx, ry, rz])
+            Rz = np.array([[math.cos(rz),-math.sin(rz),0],[math.sin(rz),math.cos(rz),0],[0,0,1]])
+            Ry = np.array([[math.cos(ry),0,math.sin(ry)],[0,1,0],[-math.sin(ry),0,math.cos(ry)]])
+            Rx = np.array([[1,0,0],[0,math.cos(rx),-math.sin(rx)],[0,math.sin(rx),math.cos(rx)]])
+            return Rz @ Ry @ Rx
+        R = euler_to_R(obs[3], obs[4], obs[5])
+        t_tcp = np.array(obs[:3]) / 1000.0
+        t_off = np.array(tcp_off) / 1000.0
+        t_flange = t_tcp - R @ t_off
+        flange = [t_flange[0]*1000, t_flange[1]*1000, t_flange[2]*1000, obs[3], obs[4], obs[5]]
+        transformer.update_pose(flange)
+        print(f"\n[*] YAML observe_pose → flange 역산 (카메라 Z: {transformer.camera_z_mm:.1f}mm)")
+        print(f"    TCP: {obs[:3]}  →  flange: {[round(v,1) for v in flange[:3]]}")
 
     print(f"\n[*] cv_detect_server 검출 대기 중... ({server_url})")
     obb = detector.wait_for_detection(timeout_sec=10.0)

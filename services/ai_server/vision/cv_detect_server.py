@@ -43,7 +43,7 @@ except ImportError:
 # ── 전역 파라미터 ──────────────────────────────────────────────────────────────
 HSV_LOWER  = np.array([0,   0,  208],  dtype=np.uint8)
 HSV_UPPER  = np.array([158, 30, 255],  dtype=np.uint8)
-MIN_AREA   = 8000
+MIN_AREA   = 6000
 MAX_AREA   = 30000
 MIN_W, MAX_W = 0, 400
 MIN_H, MAX_H = 0, 400
@@ -300,35 +300,36 @@ def _preview_loop() -> None:
         if key == ord("q"):
             break
         elif key == ord("s") and data is not None:
+            from datetime import datetime
+            ts = datetime.now().strftime("%H%M%S")
             img, result = data
             out_dir = "presentation_images"
             os.makedirs(out_dir, exist_ok=True)
-            
-            # 파이프라인 수동 재현 (현재 서버에 적용된 전역 변수 사용)
-            cv2.imwrite(f"{out_dir}/01_raw.jpg", img)
-            
+
+            cv2.imwrite(f"{out_dir}/01_raw_{ts}.jpg", img)
+
             lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             lab[:, :, 0] = clahe.apply(lab[:, :, 0])
             clahe_img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
-            cv2.imwrite(f"{out_dir}/02_clahe.jpg", clahe_img)
-            cv2.imwrite(f"{out_dir}/02_clahe_L_channel.jpg", lab[:, :, 0])
-            
+            cv2.imwrite(f"{out_dir}/02_clahe_{ts}.jpg", clahe_img)
+            cv2.imwrite(f"{out_dir}/02_clahe_L_channel_{ts}.jpg", lab[:, :, 0])
+
             blurred = cv2.GaussianBlur(clahe_img, (5, 5), 0)
             hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
             mask_before = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
-            cv2.imwrite(f"{out_dir}/03_mask_before_morph.jpg", mask_before)
-            
+            cv2.imwrite(f"{out_dir}/03_mask_before_morph_{ts}.jpg", mask_before)
+
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (MORPH_K, MORPH_K))
             mask_after = cv2.morphologyEx(mask_before, cv2.MORPH_CLOSE, kernel)
             mask_after = cv2.morphologyEx(mask_after, cv2.MORPH_OPEN, kernel)
-            cv2.imwrite(f"{out_dir}/04_mask_after_morph.jpg", mask_after)
-            
+            cv2.imwrite(f"{out_dir}/04_mask_after_morph_{ts}.jpg", mask_after)
+
             display_saved = _draw_overlay(img, result)
-            cv2.imwrite(f"{out_dir}/05_final_obb.jpg", display_saved)
-            
-            print(f"\n[SUCCESS] 파이프라인 단계별 이미지 6장이 '{out_dir}' 폴더에 저장되었습니다! 📸")
-            print(f"  적용된 HSV: {HSV_LOWER.tolist()} ~ {HSV_UPPER.tolist()}")
+            cv2.imwrite(f"{out_dir}/05_final_obb_{ts}.jpg", display_saved)
+
+            print(f"\n[SUCCESS] 단계별 이미지 5장 저장: '{out_dir}/*_{ts}.jpg'")
+            print(f"  HSV: {HSV_LOWER.tolist()} ~ {HSV_UPPER.tolist()}  morph_k={MORPH_K}")
 
     cv2.destroyAllWindows()
 
@@ -369,10 +370,10 @@ def main() -> None:
                         metavar=("H", "S", "V"), help="HSV 상한 (기본: 158 30 255)")
     parser.add_argument("--min-area",  type=int, default=1000)
     parser.add_argument("--max-area",  type=int, default=80000)
-    parser.add_argument("--min-w",     type=int, default=110)
-    parser.add_argument("--max-w",     type=int, default=200)
-    parser.add_argument("--min-h",     type=int, default=110)
-    parser.add_argument("--max-h",     type=int, default=200)
+    parser.add_argument("--min-w",     type=int, default=90)
+    parser.add_argument("--max-w",     type=int, default=170)
+    parser.add_argument("--min-h",     type=int, default=90)
+    parser.add_argument("--max-h",     type=int, default=170)
     parser.add_argument("--morph-k",   type=int, default=7)
     parser.add_argument("--host",      default="0.0.0.0")
     parser.add_argument("--port",      type=int, default=8081)
