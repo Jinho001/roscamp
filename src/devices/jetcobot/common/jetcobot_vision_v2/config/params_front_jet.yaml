@@ -50,7 +50,7 @@ profiles:
     # base_link 기준 상자 상단면 Z 높이 (mm) — 그리퍼 터치 기준 flange_z - tcp_offset_z
     z_surface_mm: 25.5
     # 비전 결과에 추가할 보정 오프셋 [x, y, z] mm
-    pick_offset_mm: [0.0, 16.3, -20.0]
+    pick_offset_mm: [20.0, 16.3, -20.0]
     # 파지 자세
     grasp_roll: 180.0
     grasp_pitch: -5.0
