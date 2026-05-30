@@ -135,6 +135,9 @@ class MotionController:
         retreat  = [x_mm, y_mm, z_mm + z_offset,  roll, pitch, rz]
 
         try:
+            self._mc.set_gripper_value(100, 30)  # 시작 전 그리퍼 열기
+            time.sleep(0.5)
+
             self._mc.send_coords(approach, _PICK_SPEED)
             if not self._wait_moving():
                 return False
