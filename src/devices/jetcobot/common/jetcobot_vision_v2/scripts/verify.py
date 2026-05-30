@@ -208,6 +208,8 @@ def main():
     parser.add_argument("--save-json", default=None, help="결과 저장 경로 (예: results/verify.json)")
     parser.add_argument("--robot", action="store_true",
                         help="로봇 연결 후 실제 flange 좌표로 T_base2cam 갱신 (더 정확)")
+    parser.add_argument("--pick", action="store_true",
+                        help="[--robot 필요] 좌표 변환 후 실제 pick 동작 실행")
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
@@ -321,6 +323,29 @@ def main():
     print(f"\n{'='*65}")
     print(f"  종합 판정: {'PASS ' + PASS if all_pass else 'FAIL ' + FAIL}")
     print(f"{'='*65}\n")
+
+    # Pick 동작
+    if args.pick:
+        if not args.robot:
+            print(f"{FAIL} --pick은 --robot 플래그와 함께 사용해야 합니다.")
+        else:
+            pick_offset = profile.get('pick_offset_mm', [0.0, 0.0, 0.0])
+            pt = transformer.pixel_to_base(obb['cx'], obb['cy'], z_surface_mm)
+            if pt is None:
+                print(f"{FAIL} 좌표 변환 실패 — pick 중단")
+            else:
+                x_mm = pt[0] + pick_offset[0]
+                y_mm = pt[1] + pick_offset[1]
+                z_mm = z_surface_mm + pick_offset[2]
+                yaw  = transformer.theta_to_yaw(obb['theta'])
+                print(f"\n╔══ Pick 동작 ══════════════════════════════════════════════════╗")
+                print(f"  변환 좌표:  x={pt[0]:.2f}  y={pt[1]:.2f}  z={z_surface_mm:.1f}mm")
+                print(f"  pick_offset: {pick_offset}")
+                print(f"  최종 목표:  x={x_mm:.2f}  y={y_mm:.2f}  z={z_mm:.1f}mm  yaw={yaw:.1f}°")
+                print(f"  실행 중...")
+                ok = motion.pick(x_mm, y_mm, z_mm, yaw, profile)
+                print(f"  결과: {'성공 ' + PASS if ok else '실패 ' + FAIL}")
+                print(f"╚═══════════════════════════════════════════════════════════════╝")
 
     if args.save_json:
         out = Path(args.save_json)
