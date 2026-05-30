@@ -335,12 +335,8 @@ def main():
                 print(f"{FAIL} 좌표 변환 실패 — pick 중단")
             else:
                 yaw  = transformer.theta_to_yaw(obb['theta'])
-                # pick_offset을 yaw 방향 기준으로 회전 적용
-                yaw_rad = math.radians(yaw)
-                ox = pick_offset[0] * math.cos(yaw_rad) - pick_offset[1] * math.sin(yaw_rad)
-                oy = pick_offset[0] * math.sin(yaw_rad) + pick_offset[1] * math.cos(yaw_rad)
-                x_mm = pt[0] + ox
-                y_mm = pt[1] + oy
+                x_mm = pt[0] + pick_offset[0]
+                y_mm = pt[1] + pick_offset[1]
                 z_mm = z_surface_mm + pick_offset[2]
                 print(f"\n╔══ Pick 동작 ══════════════════════════════════════════════════╗")
                 print(f"  변환 좌표:  x={pt[0]:.2f}  y={pt[1]:.2f}  z={z_surface_mm:.1f}mm")
