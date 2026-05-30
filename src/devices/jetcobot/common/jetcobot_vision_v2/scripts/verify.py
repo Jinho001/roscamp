@@ -34,6 +34,7 @@ sys.path.insert(0, str(_ROOT))
 
 from core.coord_transform import CoordTransformer
 from core.detector import Detector
+from core.motion import MotionController
 
 PASS = "✅"
 FAIL = "❌"
