@@ -159,6 +159,11 @@ class MotionController:
             self._mc.send_coords(retreat, _PICK_SPEED)
             if not self._wait_moving():
                 return False
+
+            if grasped:
+                self._mc.set_gripper_value(100, 30)  # 성공 시 그리퍼 열기
+                time.sleep(0.5)
+
             return grasped
 
         except Exception as exc:
