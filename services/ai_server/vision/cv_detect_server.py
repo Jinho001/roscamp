@@ -281,9 +281,12 @@ def _udp_receiver_loop(udp_port: int) -> None:
 
 
 def _preview_loop() -> None:
-    """메인 스레드에서 호출. cv2.imshow로 검출 결과 시각화."""
+    """메인 스레드에서 호출. cv2.imshow로 검출 결과 시각화 및 디버그 이미지 추출."""
+    import os
     cv2.namedWindow("CV Detect Preview", cv2.WINDOW_NORMAL)
     print("[PREVIEW] 'q' 키로 프리뷰 종료 (서버는 계속 실행됨)")
+    print("[PREVIEW] 's' 키를 누르면 현재 프레임의 파이프라인 단계별 이미지를 자동 추출/저장합니다.")
+    
     while True:
         with _frame_lock:
             data = _latest_frame
@@ -293,8 +296,39 @@ def _preview_loop() -> None:
             display = _draw_overlay(img, result)
             cv2.imshow("CV Detect Preview", display)
 
-        if cv2.waitKey(30) & 0xFF == ord("q"):
+        key = cv2.waitKey(30) & 0xFF
+        if key == ord("q"):
             break
+        elif key == ord("s") and data is not None:
+            img, result = data
+            out_dir = "presentation_images"
+            os.makedirs(out_dir, exist_ok=True)
+            
+            # 파이프라인 수동 재현 (현재 서버에 적용된 전역 변수 사용)
+            cv2.imwrite(f"{out_dir}/01_raw.jpg", img)
+            
+            lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+            clahe_img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+            cv2.imwrite(f"{out_dir}/02_clahe.jpg", clahe_img)
+            cv2.imwrite(f"{out_dir}/02_clahe_L_channel.jpg", lab[:, :, 0])
+            
+            blurred = cv2.GaussianBlur(clahe_img, (5, 5), 0)
+            hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+            mask_before = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
+            cv2.imwrite(f"{out_dir}/03_mask_before_morph.jpg", mask_before)
+            
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (MORPH_K, MORPH_K))
+            mask_after = cv2.morphologyEx(mask_before, cv2.MORPH_CLOSE, kernel)
+            mask_after = cv2.morphologyEx(mask_after, cv2.MORPH_OPEN, kernel)
+            cv2.imwrite(f"{out_dir}/04_mask_after_morph.jpg", mask_after)
+            
+            display_saved = _draw_overlay(img, result)
+            cv2.imwrite(f"{out_dir}/05_final_obb.jpg", display_saved)
+            
+            print(f"\n[SUCCESS] 파이프라인 단계별 이미지 6장이 '{out_dir}' 폴더에 저장되었습니다! 📸")
+            print(f"  적용된 HSV: {HSV_LOWER.tolist()} ~ {HSV_UPPER.tolist()}")
 
     cv2.destroyAllWindows()
 

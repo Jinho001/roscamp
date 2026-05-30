@@ -51,11 +51,16 @@ _MAX_MOVE_WAIT = 30.0
 
 
 def _normalize_angle(angle: float) -> float:
-    """각도를 -180 ~ 180 범위로 정규화."""
+    """각도를 -180 ~ 0 범위로 정규화 (그리퍼 회전 방향 통일)."""
     while angle > 180.0:
         angle -= 360.0
     while angle < -180.0:
         angle += 360.0
+    
+    # 0 ~ 180도 사이인 경우 -180을 적용하여 0 ~ -180 범위로 맞춤
+    if angle > 0.0:
+        angle -= 180.0
+        
     return angle
 
 
@@ -105,12 +110,17 @@ class VisionPickPlaceNode(Node):
         self._cv_server_url       = self.get_parameter("cv_detect_server_url").value
 
         self._mc = None
+        self._hardware_tcp_active = False
         if _MC_OK:
             try:
                 self.get_logger().info(f"MyCobot 연결 중: {port} @ {baud}")
                 self._mc = _MC280(port, baud)
                 time.sleep(0.5)
                 self.get_logger().info("MyCobot 연결 완료")
+
+                # 하드웨어 TCP 초기 설정 적용
+                self._init_tcp_settings()
+
                 self.get_logger().info("초기 자세로 이동: [0,0,0,0,0,0]")
                 self._mc.send_angles([0, 0, 0, 0, 0, 0], _PICK_SPEED)
                 self._wait_moving()
@@ -242,7 +252,8 @@ class VisionPickPlaceNode(Node):
             return False
         try:
             self._mc.send_angles([0, 0, 0, 0, 0, 0], _PICK_SPEED)
-            self._wait_moving()
+            if not self._wait_moving():
+                return False
             self._mc.set_gripper_value(_GRIPPER_OPEN, 30)
             return True
         except Exception as e:
@@ -279,7 +290,7 @@ class VisionPickPlaceNode(Node):
                 return {"success": False, "message": f"observe_pose 이동 실패: {location}"}
 
             if self._mc is not None:
-                actual = self._mc.get_coords()
+                actual = self._get_flange_coords()
                 if actual and len(actual) == 6:
                     self._update_coord_transform_pose(actual)
 
@@ -327,7 +338,7 @@ class VisionPickPlaceNode(Node):
                 return {"success": False, "message": f"observe_pose 이동 실패: {location}"}
 
             if self._mc is not None:
-                actual = self._mc.get_coords()
+                actual = self._get_flange_coords()
                 if actual and len(actual) == 6:
                     self._update_coord_transform_pose(actual)
 
@@ -480,6 +491,69 @@ class VisionPickPlaceNode(Node):
         else:
             self.get_logger().warn("[watch] set_watch 서비스 미준비 — Watcher 활성화 생략")
 
+    def _init_tcp_settings(self) -> None:
+        """MyCobot의 하드웨어 TCP reference를 주입하고 툴 좌표계를 활성화."""
+        if self._mc is None:
+            return
+        try:
+            ox, oy, oz = self._tcp_offset
+            # 만약 tcp_offset이 유효하다면 하드웨어 TCP reference 적용
+            if ox != 0.0 or oy != 0.0 or oz != 0.0:
+                has_tcp = hasattr(self._mc, 'set_tool_reference') and hasattr(self._mc, 'set_end_type')
+                if has_tcp:
+                    self.get_logger().info(f"pymycobot 하드웨어 TCP 설정 적용 중: {[ox, oy, oz]}")
+                    self._mc.set_tool_reference([ox, oy, oz, 0.0, 0.0, 0.0])
+                    time.sleep(0.1)
+                    self._mc.set_end_type(1) # 툴 좌표계 활성화
+                    time.sleep(0.1)
+                    self._hardware_tcp_active = True
+                    self.get_logger().info(
+                        f"TCP 설정 완료: tool_ref={self._mc.get_tool_reference()}, end_type={self._mc.get_end_type()}"
+                    )
+                else:
+                    self.get_logger().warn("pymycobot 라이브러리에 TCP 설정 API가 존재하지 않음 (flange 모드로 동작)")
+        except Exception as exc:
+            self.get_logger().error(f"하드웨어 TCP 설정 중 오류 발생: {exc}")
+
+    def _get_flange_coords(self) -> Optional[list]:
+        """Hand-Eye 정밀도를 보장하기 위해, 일시적으로 flange 좌표계 모드로 변환하여 현재 좌표를 취득."""
+        if self._mc is None:
+            return None
+        try:
+            has_tcp = hasattr(self._mc, 'set_end_type') and hasattr(self._mc, 'get_end_type')
+            if has_tcp and self._hardware_tcp_active:
+                prev_end = self._mc.get_end_type()
+                if prev_end != 0:
+                    self._mc.set_end_type(0) # flange 모드로 일시 전환
+                    time.sleep(0.05)
+                coords = self._mc.get_coords()
+                if prev_end != 0:
+                    self._mc.set_end_type(prev_end) # 이전 모드 복원
+                    time.sleep(0.05)
+                return coords
+            else:
+                return self._mc.get_coords()
+        except Exception as exc:
+            self.get_logger().warn(f"flange 좌표 취득 실패: {exc}")
+            return self._mc.get_coords()
+
+    def _compute_motion_params(self, x_mm: float, y_mm: float, z_mm: float, yaw_deg: float, profile: Optional[dict] = None) -> tuple:
+        """두 모션(_do_pick, _do_place)에서 공통으로 사용되는 자세 파라미터 계산 (DRY 원칙)."""
+        roll = profile.get("grasp_roll", self._grasp_roll) if profile else self._grasp_roll
+        pitch = profile.get("grasp_pitch", self._grasp_pitch) if profile else self._grasp_pitch
+        yaw_offset = profile.get("grasp_yaw_offset", self._grasp_yaw_off) if profile else self._grasp_yaw_off
+        z_offset = profile.get("pick_z_offset_mm", self._pick_z_off_mm) if profile else self._pick_z_off_mm
+
+        rz = _normalize_angle(yaw_deg + yaw_offset)
+        
+        # 하드웨어 TCP가 활성화되어 있으면 소프트웨어 offset은 0으로 처리 (중복 적용 방지)
+        if self._hardware_tcp_active:
+            ox, oy, oz = 0.0, 0.0, 0.0
+        else:
+            ox, oy, oz = self._tcp_offset
+
+        return roll, pitch, rz, z_offset, ox, oy, oz
+
     def _move_to_observe(self, location: str, profile: dict) -> bool:
         if self._mc is None:
             return False
@@ -488,13 +562,7 @@ class VisionPickPlaceNode(Node):
             return False
         try:
             self._mc.send_coords(obs, _PICK_SPEED)
-            deadline = time.monotonic() + _MAX_MOVE_WAIT
-            while time.monotonic() < deadline:
-                is_moving = self._mc.is_moving()
-                if not is_moving:
-                    return True
-                time.sleep(0.2)
-            return False
+            return self._wait_moving()
         except Exception as exc:
             self.get_logger().error(f"observe_pose 이동 실패: {exc}")
             return False
@@ -519,13 +587,10 @@ class VisionPickPlaceNode(Node):
                     if box_index < 0:
                         selected = max(self._pick_points, key=lambda p: p.confidence)
                     else:
-                        if box_index < len(self._pick_points):
-                            selected = self._pick_points[box_index]
-                        else:
-                            self.get_logger().warn(f"box_index {box_index} 범위 초과")
-                            return None
-                    self.get_logger().info(f"선택된 상자: index={selected.box_index} conf={selected.confidence:.2f}")
-                    return selected
+                        selected = next((p for p in self._pick_points if p.box_index == box_index), None)
+                    if selected is not None:
+                        self.get_logger().info(f"선택된 상자: index={selected.box_index} conf={selected.confidence:.2f}")
+                        return selected
             time.sleep(0.05)
         self.get_logger().warn(f"검출 타임아웃 ({self._detect_timeout:.1f}s)")
         return None
@@ -533,23 +598,23 @@ class VisionPickPlaceNode(Node):
     def _do_pick(self, x_mm: float, y_mm: float, z_mm: float, yaw_deg: float, profile: Optional[dict] = None) -> bool:
         if self._mc is None:
             return False
-        roll = profile.get("grasp_roll", self._grasp_roll) if profile else self._grasp_roll
-        pitch = profile.get("grasp_pitch", self._grasp_pitch) if profile else self._grasp_pitch
-        yaw_offset = profile.get("grasp_yaw_offset", self._grasp_yaw_off) if profile else self._grasp_yaw_off
-        z_offset = profile.get("pick_z_offset_mm", self._pick_z_off_mm) if profile else self._pick_z_off_mm
 
-        rz = _normalize_angle(yaw_deg + yaw_offset)
-        ox, oy, oz = self._tcp_offset
+        roll, pitch, rz, z_offset, ox, oy, oz = self._compute_motion_params(x_mm, y_mm, z_mm, yaw_deg, profile)
 
         try:
             # Approach
             approach = [x_mm + ox, y_mm + oy, z_mm + oz + z_offset, roll, pitch, rz]
             self.get_logger().info(f"[Pick] Approach: {[round(v, 2) for v in approach]}")
             self._mc.send_coords(approach, _PICK_SPEED)
-            self._wait_moving()
+            if not self._wait_moving():
+                return False
 
-            self._mc.send_coords([x_mm + ox, y_mm + oy, z_mm + oz, roll, pitch, rz], _PICK_SPEED)
-            self._wait_moving()
+            # Touch target
+            target = [x_mm + ox, y_mm + oy, z_mm + oz, roll, pitch, rz]
+            self.get_logger().info(f"[Pick] Target: {[round(v, 2) for v in target]}")
+            self._mc.send_coords(target, _PICK_SPEED)
+            if not self._wait_moving():
+                return False
 
             # Grasp
             self.get_logger().info("[Pick] Gripper Close")
@@ -560,7 +625,8 @@ class VisionPickPlaceNode(Node):
             retreat = [x_mm + ox, y_mm + oy, z_mm + oz + z_offset, roll, pitch, rz]
             self.get_logger().info(f"[Pick] Retreat: {[round(v, 2) for v in retreat]}")
             self._mc.send_coords(retreat, _PICK_SPEED)
-            self._wait_moving()
+            if not self._wait_moving():
+                return False
 
             return True
         except Exception as exc:
@@ -570,20 +636,16 @@ class VisionPickPlaceNode(Node):
     def _do_place(self, x_mm: float, y_mm: float, z_mm: float, yaw_deg: float, profile: Optional[dict] = None) -> bool:
         if self._mc is None:
             return False
-        roll = profile.get("grasp_roll", self._grasp_roll) if profile else self._grasp_roll
-        pitch = profile.get("grasp_pitch", self._grasp_pitch) if profile else self._grasp_pitch
-        yaw_offset = profile.get("grasp_yaw_offset", self._grasp_yaw_off) if profile else self._grasp_yaw_off
-        z_offset = profile.get("pick_z_offset_mm", self._pick_z_off_mm) if profile else self._pick_z_off_mm
 
-        rz = _normalize_angle(yaw_deg + yaw_offset)
-        ox, oy, oz = self._tcp_offset
+        roll, pitch, rz, z_offset, ox, oy, oz = self._compute_motion_params(x_mm, y_mm, z_mm, yaw_deg, profile)
 
         try:
             # Approach
             approach = [x_mm + ox, y_mm + oy, z_mm + oz + z_offset, roll, pitch, rz]
             self.get_logger().info(f"[Place] Approach: {[round(v, 2) for v in approach]}")
             self._mc.send_coords(approach, _PLACE_SPEED)
-            self._wait_moving()
+            if not self._wait_moving():
+                return False
 
             # Release
             self.get_logger().info("[Place] Gripper Open")
@@ -591,24 +653,27 @@ class VisionPickPlaceNode(Node):
             time.sleep(1.0)
 
             # Retreat
-            retreat = [x_mm + ox, y_mm + oy, z_mm + oz + z_offset + 50, roll, pitch, rz]
+            retreat = [x_mm + ox, y_mm + oy, z_mm + oz + z_offset + 50.0, roll, pitch, rz]
             self.get_logger().info(f"[Place] Retreat: {[round(v, 2) for v in retreat]}")
             self._mc.send_coords(retreat, _PLACE_SPEED)
-            self._wait_moving()
+            if not self._wait_moving():
+                return False
 
             return True
         except Exception as exc:
             self.get_logger().error(f"place 동작 실패: {exc}")
             return False
 
-    def _wait_moving(self) -> None:
+    def _wait_moving(self) -> bool:
         if self._mc is None:
-            return
+            return False
         deadline = time.monotonic() + _MAX_MOVE_WAIT
         while time.monotonic() < deadline:
             if not self._mc.is_moving():
-                return
+                return True
             time.sleep(0.1)
+        self.get_logger().error(f"모션 대기 초과 ({_MAX_MOVE_WAIT}초)")
+        return False
 
 
 def main(args=None) -> None:
