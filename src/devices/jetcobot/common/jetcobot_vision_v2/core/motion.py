@@ -138,17 +138,20 @@ class MotionController:
             self._mc.set_gripper_value(100, 30)  # 시작 전 그리퍼 열기
             time.sleep(0.5)
 
+            print(f"[MotionController] Approach: {approach}")
             self._mc.send_coords(approach, _PICK_SPEED)
             if not self._wait_moving():
                 return False
 
+            print(f"[MotionController] Target: {target}")
             self._mc.send_coords(target, _PICK_SPEED)
             if not self._wait_moving():
                 return False
 
             self._mc.set_gripper_value(0, 30)   # 닫기
             time.sleep(1.0)
-
+            
+            print(f"[MotionController] Retreat: {retreat}")
             self._mc.send_coords(retreat, _PICK_SPEED)
             return self._wait_moving()
 
