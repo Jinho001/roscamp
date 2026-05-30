@@ -142,7 +142,7 @@ class MotionController:
             self._mc.send_coords(approach, _PICK_SPEED)
             if not self._wait_moving():
                 return False
-
+            print(f"[MotionController] Approach 완료", self.get_flange_coords)
             print(f"[MotionController] Target: {target}")
             self._mc.send_coords(target, _PICK_SPEED)
             if not self._wait_moving():
@@ -150,10 +150,16 @@ class MotionController:
 
             self._mc.set_gripper_value(0, 30)   # 닫기
             time.sleep(1.0)
-            
+
+            gripper_val = self._mc.get_gripper_value()
+            grasped = gripper_val is not None and gripper_val >= 25
+            print(f"[MotionController] 그리퍼 값: {gripper_val}  {'파지 성공' if grasped else '헛잡기'}")
+
             print(f"[MotionController] Retreat: {retreat}")
             self._mc.send_coords(retreat, _PICK_SPEED)
-            return self._wait_moving()
+            if not self._wait_moving():
+                return False
+            return grasped
 
         except Exception as exc:
             print(f"[MotionController] pick 실패: {exc}")
