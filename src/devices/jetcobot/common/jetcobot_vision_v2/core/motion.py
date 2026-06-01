@@ -23,13 +23,11 @@ _MAX_MOVE_WAIT = 30.0
 
 
 def _normalize_angle(angle: float) -> float:
-    """각도를 0 ~ -180 범위로 정규화 (그리퍼 회전 방향 통일)."""
-    while angle > 180.0:
-        angle -= 360.0
-    while angle < -180.0:
-        angle += 360.0
-    if angle > 0.0:
+    """각도를 -90 ~ 90 범위로 정규화 (하드웨어 케이블 간섭 원천 방지)."""
+    while angle > 90.0:
         angle -= 180.0
+    while angle < -90.0:
+        angle += 180.0
     return angle
 
 
@@ -147,6 +145,18 @@ class MotionController:
             self._mc.send_coords(target, _PICK_SPEED)
             if not self._wait_moving():
                 return False
+
+            # 피치 오차 피드백 보정 루프
+            curr = self._mc.get_coords()
+            if curr and len(curr) == 6:
+                actual_pitch = curr[4]
+                pitch_error = actual_pitch - pitch
+                if abs(pitch_error) > 0.5:
+                    corrected_pitch = pitch - pitch_error
+                    corrected_target = [x_mm, y_mm, z_mm, roll, corrected_pitch, rz]
+                    print(f"[MotionController] Pitch 오차 감지: {pitch_error:.2f}도 -> {corrected_pitch:.2f}도로 역보정 재조정 이동")
+                    self._mc.send_coords(corrected_target, 10)  # 정밀 진입을 위해 느린 속도로 이동
+                    self._wait_moving()
 
             self._mc.set_gripper_value(0, 30)   # 닫기
             time.sleep(1.0)

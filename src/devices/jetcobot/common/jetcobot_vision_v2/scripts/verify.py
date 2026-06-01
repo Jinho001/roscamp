@@ -376,28 +376,47 @@ def main():
             
             # 2. Pick 사이클 측정
             times_pick = []
-            print("  [2] 전체 Pick 사이클 (Approach -> Grasp -> Retreat) 측정 중...")
+            print("  [2] 전체 Pick 사이클 (실시간 검출 -> Approach -> Grasp -> Retreat) 측정 중...")
             pick_offset = profile.get('pick_offset_mm', [0.0, 0.0, 0.0])
-            pt = transformer.pixel_to_base(obb['cx'], obb['cy'], z_surface_mm)
-            if pt is not None:
-                yaw  = transformer.theta_to_yaw(obb['theta'])
-                x_mm = pt[0] + pick_offset[0]
-                y_mm = pt[1] + pick_offset[1]
+            
+            for i in range(10):
+                print(f"\n--- [{i+1}/10 회차 테스트 준비] 상자 위치를 변경해 주세요. (3초 대기) ---")
+                for sec in range(3, 0, -1):
+                    print(f"      {sec}...")
+                    time.sleep(1.0)
+                
+                print("  [비전 검출 시작]")
+                t_start = time.perf_counter()
+                res = detector.fetch_best(timeout=2.0)
+                if res is None:
+                    print(f"      {FAIL} 상자를 감지하지 못해 이번 회차는 스킵합니다.")
+                    motion.move_to(obs)
+                    continue
+                    
+                pt_curr = transformer.pixel_to_base(res['cx'], res['cy'], z_surface_mm)
+                if pt_curr is None:
+                    print(f"      {FAIL} 좌표 변환 실패로 스킵합니다.")
+                    motion.move_to(obs)
+                    continue
+                    
+                yaw_curr = transformer.theta_to_yaw(res['theta'])
+                x_mm = pt_curr[0] + pick_offset[0]
+                y_mm = pt_curr[1] + pick_offset[1]
                 z_mm = z_surface_mm + pick_offset[2]
                 
-                for i in range(10):
-                    t2 = time.perf_counter()
-                    motion.pick(x_mm, y_mm, z_mm, yaw, profile)
-                    t3 = time.perf_counter()
-                    times_pick.append(t3 - t2)
-                    # Pick 이후 다시 초기 위치(observe_pose)로 복귀해야 반복 측정 가능
-                    motion.move_to(obs)
-                    time.sleep(0.5)
+                print(f"  [로봇 구동] Target: X={x_mm:.1f}, Y={y_mm:.1f}, Z={z_mm:.1f}, Yaw={yaw_curr:.1f}")
+                motion.pick(x_mm, y_mm, z_mm, yaw_curr, profile)
+                t_end = time.perf_counter()
+                
+                times_pick.append(t_end - t_start)
+                
+                # 다음 측정을 위해 다시 관찰 위치로 복귀
+                motion.move_to(obs)
                     
-                if times_pick:
-                    avg_p = sum(times_pick)/len(times_pick)
-                    max_p = max(times_pick)
-                    print(f"      평균: {avg_p:.2f} 초 / 최대: {max_p:.2f} 초")
+            if times_pick:
+                avg_p = sum(times_pick)/len(times_pick)
+                max_p = max(times_pick)
+                print(f"      평균: {avg_p:.2f} 초 / 최대: {max_p:.2f} 초")
             print(f"╚═══════════════════════════════════════════════════════════════╝")
 
     if args.save_json:
