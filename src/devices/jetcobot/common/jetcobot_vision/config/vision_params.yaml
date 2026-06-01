@@ -49,7 +49,7 @@ vision_pick_node:
     tcp_offset:
       - 0.0
       - 20.0
-      - 110.0
+      - 100.0 # 실측값: 2026-05-28 하드웨어 TCP 100mm 통일
     pick_z_offset_mm:      20.0
     detect_timeout_sec:    10.0
     coord_topic:           "/coord_transform_node/pick_point"
@@ -66,7 +66,7 @@ vision_place_node:
     tcp_offset:
       - 0.0
       - 20.0
-      - 110.0
+      - 100.0 # 실측값: 2026-05-28 하드웨어 TCP 100mm 통일
     pick_z_offset_mm:      20.0
     detect_timeout_sec:    10.0
     coord_topic:           "/coord_transform_node/pick_point"
@@ -83,7 +83,7 @@ vision_pick_place_node:
     tcp_offset:
       - 0.0
       - 20.0
-      - 100.0
+      - 100.0 # 실측값: 2026-05-28 하드웨어 TCP 100mm 통일
     pick_z_offset_mm:      20.0
     detect_timeout_sec:    10.0
     coord_topic:           "/coord_transform_node/pick_point"

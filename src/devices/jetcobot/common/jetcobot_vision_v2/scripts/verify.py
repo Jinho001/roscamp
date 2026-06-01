@@ -210,6 +210,8 @@ def main():
                         help="로봇 연결 후 실제 flange 좌표로 T_base2cam 갱신 (더 정확)")
     parser.add_argument("--pick", action="store_true",
                         help="[--robot 필요] 좌표 변환 후 실제 pick 동작 실행")
+    parser.add_argument("--measure-cycle", action="store_true",
+                        help="사이클 타임 10회 측정 모드 (비전 & 파지)")
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
@@ -346,6 +348,57 @@ def main():
                 ok = motion.pick(x_mm, y_mm, z_mm, yaw, profile)
                 print(f"  결과: {'성공 ' + PASS if ok else '실패 ' + FAIL}")
                 print(f"╚═══════════════════════════════════════════════════════════════╝")
+
+    # 사이클 타임 측정 모드
+    if args.measure_cycle:
+        if not args.robot:
+            print(f"{FAIL} --measure-cycle 은 --robot 플래그와 함께 사용해야 합니다.")
+        else:
+            print(f"\n╔══ 사이클 타임 측정 (10회 반복) ════════════════════════════════╗")
+            import time
+            times_vision = []
+            
+            # 1. 비전 파이프라인 측정
+            print("  [1] 비전 파이프라인 (캡처 -> OBB -> 좌표 변환) 측정 중...")
+            for i in range(10):
+                t0 = time.perf_counter()
+                res = detector.fetch_best(timeout=1.0)
+                if res is not None:
+                    _ = transformer.pixel_to_base(res['cx'], res['cy'], z_surface_mm)
+                t1 = time.perf_counter()
+                times_vision.append((t1 - t0) * 1000)
+                time.sleep(0.1)
+                
+            if times_vision:
+                avg_v = sum(times_vision)/len(times_vision)
+                max_v = max(times_vision)
+                print(f"      평균: {avg_v:.1f} ms / 최대: {max_v:.1f} ms")
+            
+            # 2. Pick 사이클 측정
+            times_pick = []
+            print("  [2] 전체 Pick 사이클 (Approach -> Grasp -> Retreat) 측정 중...")
+            pick_offset = profile.get('pick_offset_mm', [0.0, 0.0, 0.0])
+            pt = transformer.pixel_to_base(obb['cx'], obb['cy'], z_surface_mm)
+            if pt is not None:
+                yaw  = transformer.theta_to_yaw(obb['theta'])
+                x_mm = pt[0] + pick_offset[0]
+                y_mm = pt[1] + pick_offset[1]
+                z_mm = z_surface_mm + pick_offset[2]
+                
+                for i in range(10):
+                    t2 = time.perf_counter()
+                    motion.pick(x_mm, y_mm, z_mm, yaw, profile)
+                    t3 = time.perf_counter()
+                    times_pick.append(t3 - t2)
+                    # Pick 이후 다시 초기 위치(observe_pose)로 복귀해야 반복 측정 가능
+                    motion.move_to(obs)
+                    time.sleep(0.5)
+                    
+                if times_pick:
+                    avg_p = sum(times_pick)/len(times_pick)
+                    max_p = max(times_pick)
+                    print(f"      평균: {avg_p:.2f} 초 / 최대: {max_p:.2f} 초")
+            print(f"╚═══════════════════════════════════════════════════════════════╝")
 
     if args.save_json:
         out = Path(args.save_json)

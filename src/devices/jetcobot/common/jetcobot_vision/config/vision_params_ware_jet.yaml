@@ -24,12 +24,12 @@ coord_transform_node:
       - 0.0
       - 0.0
       - 1.0
-    # TODO: WareJet 카메라 내부 파라미터로 교체
+    # camera_info.yaml [fx, fy, cx, cy]  — WareJet 실측 (2026-05-12, RMS 0.2571 px)
     camera_intrinsics:
-      - 990.8120239698858
-      - 987.6160053978392
-      - 301.19713298628164
-      - 238.38042557352367
+      - 1055.9565372597326
+      - 1058.23517214056
+      - 336.680043875169
+      - 254.03743659918587
     # TODO: WareJet observe_pose 실측 후 업데이트
     observe_pose:
       - -62.4
