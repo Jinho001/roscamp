@@ -146,17 +146,25 @@ class MotionController:
             if not self._wait_moving():
                 return False
 
-            # 피치 오차 피드백 보정 루프
-            curr = self._mc.get_coords()
-            if curr and len(curr) == 6:
-                actual_pitch = curr[4]
-                pitch_error = actual_pitch - pitch
-                if abs(pitch_error) > 0.5:
+            # 피치 오차 피드백 보정 루프 (오차 2도 이내 만족할 때까지 반복)
+            max_iterations = 3
+            for iteration in range(max_iterations):
+                curr = self._mc.get_coords()
+                if curr and len(curr) == 6:
+                    actual_pitch = curr[4]
+                    pitch_error = actual_pitch - pitch
+                    
+                    if abs(pitch_error) <= 2.0:
+                        print(f"[MotionController] Pitch 오차 만족: {pitch_error:.2f}도 (허용 기준 2.0도 이내)")
+                        break
+                    
                     corrected_pitch = pitch - pitch_error
                     corrected_target = [x_mm, y_mm, z_mm, roll, corrected_pitch, rz]
-                    print(f"[MotionController] Pitch 오차 감지: {pitch_error:.2f}도 -> {corrected_pitch:.2f}도로 역보정 재조정 이동")
-                    self._mc.send_coords(corrected_target, 10)  # 정밀 진입을 위해 느린 속도로 이동
+                    print(f"[MotionController] Pitch 오차 발생 ({iteration+1}회차): {pitch_error:.2f}도 -> {corrected_pitch:.2f}도로 역보정 재조정 이동")
+                    self._mc.send_coords(corrected_target, 10)  # 느린 속도로 정밀 이동
                     self._wait_moving()
+                else:
+                    break
 
             self._mc.set_gripper_value(0, 30)   # 닫기
             time.sleep(1.0)
