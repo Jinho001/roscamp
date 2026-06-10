@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>김진호 | Eye-in-Hand 로봇 비전 파이프라인</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3250;
+      --text: #e8eaf0;
+      --text-muted: #8b90a8;
+      --accent: #4f8ef7;
+      --accent2: #34c78a;
+      --accent3: #f7a94f;
+      --red: #f76f6f;
+      --mono: 'JetBrains Mono', monospace;
+      --sans: 'Inter', -apple-system, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.7;
+      font-size: 16px;
+    }
+
+    /* ── 네비게이션 ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(15,17,23,0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex; align-items: center; gap: 2rem;
+      height: 56px;
+    }
+    nav .logo { font-weight: 700; color: var(--accent); font-size: 0.95rem; letter-spacing: 0.02em; white-space: nowrap; }
+    nav a { color: var(--text-muted); text-decoration: none; font-size: 0.875rem; transition: color .2s; }
+    nav a:hover { color: var(--text); }
+    nav .spacer { flex: 1; }
+
+    /* ── 공통 레이아웃 ── */
+    section { padding: 80px 0; }
+    .container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+    .section-label {
+      font-size: 0.75rem; font-weight: 600; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+    h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 700; line-height: 1.2; }
+    h2 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; }
+    h3 { font-size: 1.2rem; font-weight: 600; margin-bottom: 0.75rem; color: var(--accent); }
+    p { color: var(--text-muted); margin-bottom: 1rem; }
+    strong { color: var(--text); font-weight: 600; }
+
+    /* ── 이미지 플레이스홀더 ── */
+    .img-placeholder {
+      background: var(--surface2);
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 0.5rem;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      text-align: center;
+      padding: 2rem;
+    }
+    .img-placeholder .icon { font-size: 2rem; opacity: 0.5; }
+    .img-placeholder .filename { font-family: var(--mono); font-size: 0.8rem; color: var(--accent3); }
+    .img-placeholder img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; display: block; }
+
+    /* ── HERO ── */
+    #hero {
+      min-height: 100vh;
+      display: flex; align-items: center;
+      position: relative; overflow: hidden;
+      padding: 80px 0;
+    }
+    #hero .hero-bg {
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, #0f1117 0%, #1a1d27 50%, #0f1117 100%);
+    }
+    #hero .hero-bg img {
+      width: 100%; height: 100%; object-fit: cover; opacity: 0.25;
+    }
+    #hero .container { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; align-items: center; }
+    .hero-text .tag {
+      display: inline-block;
+      background: rgba(79,142,247,0.15); color: var(--accent);
+      border: 1px solid rgba(79,142,247,0.3);
+      padding: 0.25rem 0.75rem; border-radius: 999px;
+      font-size: 0.8rem; font-weight: 500; margin-bottom: 1.5rem;
+    }
+    .hero-text h1 { margin-bottom: 1rem; }
+    .hero-text .subtitle { font-size: 1.05rem; color: var(--text-muted); margin-bottom: 2rem; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 2rem; }
+    .kpi-item {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; padding: 1rem;
+      text-align: center;
+    }
+    .kpi-value { font-size: 1.4rem; font-weight: 700; color: var(--accent2); }
+    .kpi-label { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; }
+    .hero-image { border-radius: 16px; overflow: hidden; aspect-ratio: 4/3; }
+
+    /* ── 스택 배지 ── */
+    .stack-badges { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.5rem; }
+    .badge {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.25rem 0.6rem;
+      font-size: 0.78rem; color: var(--text-muted); font-family: var(--mono);
+    }
+
+    /* ── 카드 그리드 ── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 1.75rem;
+    }
+    .card-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    .card-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
+
+    /* ── 제약 조건 ── */
+    .constraint-item {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1.25rem;
+    }
+    .constraint-icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    .constraint-title { font-weight: 600; color: var(--text); margin-bottom: 0.25rem; }
+    .constraint-arrow {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin-top: 0.75rem; padding-top: 0.75rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    .constraint-arrow .arrow { color: var(--accent); font-weight: 600; }
+    .constraint-arrow .result { color: var(--text-muted); }
+
+    /* ── 아키텍처 흐름 ── */
+    .flow {
+      display: flex; flex-direction: column; gap: 0;
+    }
+    .flow-item {
+      display: flex; align-items: flex-start; gap: 1.25rem;
+      padding: 1rem 0;
+    }
+    .flow-item:not(:last-child) { border-bottom: 1px solid var(--border); }
+    .flow-num {
+      background: var(--accent); color: white;
+      border-radius: 50%; width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.8rem; font-weight: 700; flex-shrink: 0; margin-top: 2px;
+    }
+    .flow-content { flex: 1; }
+    .flow-title { font-weight: 600; color: var(--text); margin-bottom: 0.2rem; }
+    .flow-desc { font-size: 0.875rem; color: var(--text-muted); margin: 0; }
+    .flow-code { font-family: var(--mono); font-size: 0.78rem; color: var(--accent3); }
+
+    /* ── 코드 블록 ── */
+    pre {
+      background: #0d1117; border: 1px solid var(--border);
+      border-radius: 10px; padding: 1.25rem;
+      overflow-x: auto; font-family: var(--mono);
+      font-size: 0.85rem; line-height: 1.6;
+      color: #cdd6f4;
+    }
+    .code-comment { color: #6c7086; }
+    .code-keyword { color: var(--accent); }
+    .code-string { color: var(--accent2); }
+    .code-func { color: var(--accent3); }
+
+    /* ── 2열 레이아웃 (텍스트 + 이미지) ── */
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: start; }
+    .split.reverse { direction: rtl; }
+    .split.reverse > * { direction: ltr; }
+
+    /* ── 메트릭 테이블 ── */
+    .metric-table { width: 100%; border-collapse: collapse; }
+    .metric-table th {
+      text-align: left; padding: 0.75rem 1rem;
+      background: var(--surface2); color: var(--text-muted);
+      font-size: 0.8rem; font-weight: 600; letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .metric-table th:first-child { border-radius: 8px 0 0 0; }
+    .metric-table th:last-child { border-radius: 0 8px 0 0; }
+    .metric-table td {
+      padding: 0.9rem 1rem; border-bottom: 1px solid var(--border);
+      font-size: 0.9rem;
+    }
+    .metric-table td:first-child { color: var(--text-muted); }
+    .metric-table td:nth-child(2) { font-weight: 700; color: var(--accent2); font-family: var(--mono); }
+    .metric-table td:last-child { font-size: 0.82rem; color: var(--text-muted); }
+
+    /* ── 트러블슈팅 카드 ── */
+    .trouble-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; overflow: hidden;
+    }
+    .trouble-header {
+      background: var(--surface2); padding: 1.25rem 1.75rem;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 1rem;
+    }
+    .trouble-badge {
+      background: rgba(247,106,111,0.15); color: var(--red);
+      border: 1px solid rgba(247,106,111,0.3);
+      border-radius: 6px; padding: 0.2rem 0.6rem;
+      font-size: 0.78rem; font-weight: 600; font-family: var(--mono);
+    }
+    .trouble-badge.fixed { background: rgba(52,199,138,0.15); color: var(--accent2); border-color: rgba(52,199,138,0.3); }
+    .trouble-body { padding: 1.75rem; }
+    .trouble-row { display: grid; grid-template-columns: 100px 1fr; gap: 1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+    .trouble-row dt { color: var(--text-muted); font-weight: 500; padding-top: 2px; }
+    .trouble-row dd { color: var(--text); margin: 0; }
+
+    /* ── 비디오 임베드 ── */
+    .video-wrap {
+      aspect-ratio: 16/9; background: var(--surface2);
+      border: 2px dashed var(--border); border-radius: 12px;
+      overflow: hidden; position: relative;
+    }
+    .video-wrap iframe { width: 100%; height: 100%; border: none; }
+    .video-placeholder {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 0.75rem; color: var(--text-muted);
+    }
+    .video-placeholder .play-icon {
+      width: 64px; height: 64px;
+      background: rgba(79,142,247,0.2); border: 2px solid var(--accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.5rem;
+    }
+
+    /* ── 향후 개선 ── */
+    .future-item {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1.25rem 1.5rem;
+      display: flex; gap: 1rem; align-items: flex-start;
+    }
+    .future-num {
+      font-family: var(--mono); font-size: 0.8rem; color: var(--accent);
+      font-weight: 700; padding-top: 3px; flex-shrink: 0;
+    }
+
+    /* ── 섹션 구분선 ── */
+    .divider { border: none; border-top: 1px solid var(--border); margin: 0; }
+
+    /* ── 비교 테이블 (v1 vs v2) ── */
+    .compare-table { width: 100%; border-collapse: collapse; }
+    .compare-table th {
+      padding: 0.75rem 1.25rem; background: var(--surface2);
+      font-size: 0.85rem; text-align: center;
+    }
+    .compare-table th:first-child { text-align: left; }
+    .compare-table td { padding: 0.85rem 1.25rem; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+    .compare-table td:first-child { color: var(--text-muted); }
+    .compare-table td:nth-child(2) { text-align: center; color: var(--red); }
+    .compare-table td:nth-child(3) { text-align: center; color: var(--accent2); font-weight: 600; }
+
+    /* ── 푸터 ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    /* ── 반응형 ── */
+    @media (max-width: 768px) {
+      #hero .container { grid-template-columns: 1fr; }
+      .hero-image { display: none; }
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .split { grid-template-columns: 1fr; }
+      .card-grid-2 { grid-template-columns: 1fr; }
+      .card-grid-3 { grid-template-columns: 1fr 1fr; }
+      nav a { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ────────────────────────── 네비게이션 ────────────────────────── -->
+<nav>
+  <span class="logo">김진호 · Vision Pipeline</span>
+  <a href="#background">배경</a>
+  <a href="#architecture">아키텍처</a>
+  <a href="#challenges">기술 도전</a>
+  <a href="#troubleshooting">트러블슈팅</a>
+  <a href="#demo">데모</a>
+  <a href="#results">결과</a>
+</nav>
+
+<!-- ────────────────────────── HERO ────────────────────────── -->
+<section id="hero">
+  <div class="hero-bg">
+    <!-- 📸 hero.jpg: 로봇이 상자를 파지하는 순간 측면 샷 -->
+    <img src="assets/hero.jpg" alt="Pick & Place Demo" onerror="this.style.display='none'" />
+  </div>
+  <div class="container">
+    <div class="hero-text">
+      <div class="tag">ROS2 · Computer Vision · Robotics</div>
+      <h1>Eye-in-Hand<br/>비전 Pick & Place<br/>파이프라인</h1>
+      <p class="subtitle">단안 카메라만으로 3D 파지 좌표 복원 —<br/>Depth 센서 없이 Hand-Eye 캘리브레이션부터 현장 테스트까지</p>
+      <div class="stack-badges">
+        <span class="badge">ROS2 Jazzy</span>
+        <span class="badge">Python 3.12</span>
+        <span class="badge">OpenCV 4.9</span>
+        <span class="badge">PyMyCobot</span>
+        <span class="badge">FastAPI</span>
+        <span class="badge">NumPy</span>
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi-item">
+          <div class="kpi-value">0.257 px</div>
+          <div class="kpi-label">렌즈 왜곡 RMS</div>
+        </div>
+        <div class="kpi-item">
+          <div class="kpi-value">&lt;0.95 mm</div>
+          <div class="kpi-label">파지 좌표 오차</div>
+        </div>
+        <div class="kpi-item">
+          <div class="kpi-value">12.62 s</div>
+          <div class="kpi-label">사이클 타임</div>
+        </div>
+        <div class="kpi-item">
+          <div class="kpi-value">1.245 mm</div>
+          <div class="kpi-label">Hand-Eye 캘리브 잔차</div>
+        </div>
+        <div class="kpi-item">
+          <div class="kpi-value">74.8 ms</div>
+          <div class="kpi-label">비전 처리 지연 (평균)</div>
+        </div>
+        <div class="kpi-item">
+          <div class="kpi-value">8회</div>
+          <div class="kpi-label">연속 파지 성공 (초기 검증)</div>
+        </div>
+      </div>
+    </div>
+    <div class="hero-image">
+      <!-- 📸 system_overview.jpg: 로봇 + 카메라 + 상자 전체 구성 -->
+      <div class="img-placeholder" style="height:100%; min-height:320px;">
+        <div class="icon">📷</div>
+        <div>시스템 전체 구성 사진</div>
+        <div class="filename">assets/system_overview.jpg</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ────────────────────────── 프로젝트 배경 ────────────────────────── -->
+<section id="background">
+  <div class="container">
+    <div class="section-label">Project Background</div>
+    <h2>무인 신발 매장 — 내 기여 범위</h2>
+    <p>고객이 키오스크로 신발을 선택하면 AMR과 협동로봇이 자동으로 픽업·배달하는 완전 무인 신발 매장 시스템(MSS). 저는 <strong>협동로봇 비전 파이프라인 전체</strong>를 담당했습니다.</p>
+
+    <div class="split" style="margin-top: 2.5rem;">
+      <div>
+        <h3>핵심 제약 조건</h3>
+        <div style="display:flex; flex-direction:column; gap:1rem;">
+          <div class="constraint-item">
+            <div class="constraint-icon">📷</div>
+            <div class="constraint-title">Depth 카메라 없음</div>
+            <p style="font-size:0.875rem; margin:0;">예산 제한으로 RGB 단안 카메라 1대만 사용 가능</p>
+            <div class="constraint-arrow"><span class="arrow">→</span><span class="result">Ray-Plane Intersection으로 3D 복원</span></div>
+          </div>
+          <div class="constraint-item">
+            <div class="constraint-icon">🤖</div>
+            <div class="constraint-title">데이터셋 없음</div>
+            <p style="font-size:0.875rem; margin:0;">딥러닝 학습 불가</p>
+            <div class="constraint-arrow"><span class="arrow">→</span><span class="result">OpenCV HSV + 기하학적 알고리즘</span></div>
+          </div>
+          <div class="constraint-item">
+            <div class="constraint-icon">👥</div>
+            <div class="constraint-title">팀 공유 로봇</div>
+            <p style="font-size:0.875rem; margin:0;">원격에서 알고리즘 검증 수단 필요</p>
+            <div class="constraint-arrow"><span class="arrow">→</span><span class="result">ROS2 의존성 없는 Core 분리 + verify.py</span></div>
+          </div>
+          <div class="constraint-item">
+            <div class="constraint-icon">⏱</div>
+            <div class="constraint-title">5주 제한</div>
+            <p style="font-size:0.875rem; margin:0;">설계·구현·현장 테스트 전부 포함</p>
+            <div class="constraint-arrow"><span class="arrow">→</span><span class="result">단계별 격리 검증으로 디버깅 단축</span></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <!-- 📸 system_overview.jpg -->
+        <div class="img-placeholder" style="min-height:420px; border-radius:14px;">
+          <div class="icon">🏭</div>
+          <div>실제 운용 환경<br/>로봇 + 카메라 + 상자 구성 사진</div>
+          <div class="filename">assets/system_overview.jpg</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ────────────────────────── 아키텍처 ────────────────────────── -->
+<section id="architecture">
+  <div class="container">
+    <div class="section-label">System Architecture</div>
+    <h2>데이터 흐름</h2>
+    <p>카메라에서 로봇 파지까지의 전체 파이프라인.</p>
+
+    <div class="split" style="margin-top:2.5rem;">
+      <div class="card">
+        <div class="flow">
+          <div class="flow-item">
+            <div class="flow-num">1</div>
+            <div class="flow-content">
+              <div class="flow-title">카메라 캡처 & UDP 전송</div>
+              <div class="flow-desc">stream_sender.py — JPEG quality=50, 65KB 초과 시 품질 자동 감소, 단일 UDP 패킷</div>
+              <div class="flow-code">→ 단일 UDP 패킷 (≤65,000 bytes)</div>
+            </div>
+          </div>
+          <div class="flow-item">
+            <div class="flow-num">2</div>
+            <div class="flow-content">
+              <div class="flow-title">OBB 검출</div>
+              <div class="flow-desc">cv_detect_server.py — LAB CLAHE → HSV 마스킹 → minAreaRect</div>
+              <div class="flow-code">→ cx, cy, w, h, θ, confidence</div>
+            </div>
+          </div>
+          <div class="flow-item">
+            <div class="flow-num">3</div>
+            <div class="flow-content">
+              <div class="flow-title">좌표 변환</div>
+              <div class="flow-desc">core/coord_transform.py — Flange 좌표로 T_base2cam 재계산 후 Ray-Plane 교점</div>
+              <div class="flow-code">→ P_base (x, y, z, yaw)</div>
+            </div>
+          </div>
+          <div class="flow-item">
+            <div class="flow-num">4</div>
+            <div class="flow-content">
+              <div class="flow-title">Pick 실행</div>
+              <div class="flow-desc">core/motion.py — Approach → Grasp (그리퍼값 ≥25 확인) → Retreat</div>
+              <div class="flow-code">→ PyMyCobot 시리얼 1Mbps</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 📸 obb_detection.png: OBB 박스 + 수치 표시된 검출 화면 -->
+      <div class="img-placeholder" style="min-height:380px; border-radius:14px;">
+        <div class="icon">🎯</div>
+        <div>OBB 검출 결과 화면<br/><small>cx/cy/θ 수치가 표시된 카메라 뷰</small></div>
+        <div class="filename">assets/obb_detection.png</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ────────────────────────── 기술 도전 ────────────────────────── -->
+<section id="challenges">
+  <div class="container">
+    <div class="section-label">Technical Challenges</div>
+    <h2>핵심 기술 도전 4가지</h2>
+
+    <!-- 도전 1 -->
+    <div style="margin-top:3rem;">
+      <h3>① Depth 센서 없이 3D 좌표 복원 — Ray-Plane Intersection</h3>
+      <div class="split">
+        <div>
+          <p>단안 카메라 픽셀 하나는 카메라에서 뻗어나가는 무한한 Ray 위의 어느 점이든 될 수 있습니다. <strong>"상자는 항상 Z_surface 위에 있다"</strong>는 물리적 제약 하나가 해를 유일하게 만듭니다.</p>
+          <pre><span class="code-comment"># core/coord_transform.py</span>
+ray_c  = K_inv @ [cx, cy, 1.0]      <span class="code-comment"># 카메라 좌표계 Ray</span>
+ray_b  = R @ ray_c                   <span class="code-comment"># Base 좌표계로 회전</span>
+t = (z_surface - origin[2]) / ray_b[2]  <span class="code-comment"># 교점 파라미터</span>
+P = origin + t * ray_b               <span class="code-comment"># 파지 좌표 (mm)</span></pre>
+          <p style="margin-top:1rem;"><strong>결과:</strong> 파지 좌표 오차 &lt;0.95 mm (verify.py Step B 실측)</p>
+          <p><strong>트레이드오프:</strong> 물체가 평면 위에 있을 때만 동작. 신발 상자는 항상 트레이 위에 놓이므로 도메인에서 보장.</p>
+        </div>
+        <div>
+          <!-- 📸 ray_plane_diagram.png: Ray가 평면과 교점을 이루는 다이어그램 -->
+          <div class="img-placeholder" style="min-height:300px; border-radius:14px;">
+            <div class="icon">📐</div>
+            <div>Ray-Plane 교점 다이어그램<br/><small>카메라 → Ray → Z_surface 교점</small></div>
+            <div class="filename">assets/ray_plane_diagram.png</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 도전 2 -->
+    <div style="margin-top:3.5rem;">
+      <h3>② Hand-Eye 캘리브레이션 — AX = XB (Tsai-Lenz)</h3>
+      <div class="split reverse">
+        <div>
+          <p>카메라가 로봇 EE에 고정 마운트되어 있어, <strong>Flange → Camera 변환 행렬 T_flange2cam</strong>을 실측해야 좌표 변환이 가능합니다.</p>
+          <pre><span class="code-comment"># N개 자세에서 수집</span>
+A_i = T_base2flange   <span class="code-comment"># 관절 각도로 계산</span>
+B_i = T_cam2board     <span class="code-comment"># 체커보드 solvePnP</span>
+
+<span class="code-comment"># Tsai-Lenz 풀이</span>
+T_flange2cam = cv2.calibrateHandEye(TSAI)</pre>
+          <p style="margin-top:1rem;"><strong>왜 Flange 기준인가:</strong> TCP는 그리퍼에 따라 달라지는 가변값. Flange는 공구 교체와 무관한 고정점이므로 T_flange2cam은 그리퍼 교체 후에도 재수행 불필요.</p>
+          <p><strong>수집 전략:</strong> observe 자세 근방 ±30~50mm / ±15° 소변위 25포즈 집중 수집</p>
+          <p><strong>결과:</strong> 캘리브레이션 잔차 1.245 mm</p>
+        </div>
+        <div>
+          <!-- 📸 checkerboard_calib.jpg: 코너 검출된 체커보드 화면 -->
+          <div class="img-placeholder" style="min-height:300px; border-radius:14px;">
+            <div class="icon">♟</div>
+            <div>Hand-Eye 캘리브레이션<br/>체커보드 코너 검출 화면</div>
+            <div class="filename">assets/checkerboard_calib.jpg</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 도전 3 -->
+    <div style="margin-top:3.5rem;">
+      <h3>③ 이동 중 프레임 배제 — 순차 실행으로 타이밍 보장</h3>
+      <p>로봇 이동 중 캡처된 OBB 검출 결과를 사용하면 오파지 발생. <code>move_to()</code>가 완전히 반환된 이후에만 <code>wait_for_detection()</code>이 호출되도록 순차 실행으로 보장.</p>
+      <pre><span class="code-comment"># nodes/vision_pick_place_node.py</span>
+<span class="code-func">self._motion.move_to</span>(observe_pose)          <span class="code-comment"># blocking — 완전 정지 대기</span>
+flange = <span class="code-func">self._motion.get_flange_coords</span>()  <span class="code-comment"># Flange 좌표 읽기</span>
+<span class="code-func">self._transformer.update_pose</span>(flange)      <span class="code-comment"># T_base2cam 재계산</span>
+obb = <span class="code-func">self._detector.wait_for_detection</span>(timeout=10.0)  <span class="code-comment"># 정지 후 첫 프레임</span></pre>
+    </div>
+
+    <!-- 도전 4 -->
+    <div style="margin-top:3.5rem;">
+      <h3>④ 로봇 없이 알고리즘 검증 — Clean Architecture (v1 → v2)</h3>
+      <div class="split">
+        <div>
+          <p>v1에서는 좌표 변환 코드가 ROS2 노드에 묶여 있어 수학 로직 하나를 수정할 때마다 로봇 연결 + ROS2 부팅이 필요했습니다. v2에서 Core/Node를 분리했습니다.</p>
+          <table class="compare-table" style="margin-top:1rem; border-radius:10px; overflow:hidden;">
+            <thead>
+              <tr><th>항목</th><th>v1 모놀리식</th><th>v2 Core/Node</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>수정 → 검증</td><td>로봇+ROS2 부팅 (수 분)</td><td>verify.py 단독 실행</td></tr>
+              <tr><td>단위 테스트</td><td>불가</td><td>가능</td></tr>
+              <tr><td>C++ 포팅</td><td>전체 재작성</td><td>core/ 만</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <!-- 📸 verify_terminal.png: verify.py 실행 결과 터미널 -->
+          <div class="img-placeholder" style="min-height:280px; border-radius:14px;">
+            <div class="icon">💻</div>
+            <div>verify.py 실행 결과<br/><small>Step A / B / C 수치 출력 화면</small></div>
+            <div class="filename">assets/verify_terminal.png</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ────────────────────────── OBB 검출 파이프라인 ────────────────────────── -->
+<section>
+  <div class="container">
+    <div class="section-label">Detection Pipeline</div>
+    <h2>OBB 검출 파이프라인</h2>
+    <p>흰색 단색 상자 환경에서 딥러닝보다 빠르고 파라미터 조정이 직관적인 OpenCV 기반 파이프라인.</p>
+    <div style="margin-top:2rem;">
+      <!-- 📸 detection_pipeline.png: 원본→CLAHE→마스크→OBB 4단계 이미지 -->
+      <div class="img-placeholder" style="min-height:220px; border-radius:14px;">
+        <div class="icon">🔬</div>
+        <div>검출 파이프라인 단계별 이미지<br/><small>원본 → LAB CLAHE → HSV 마스크 → OBB 결과 (4단계 가로 나열)</small></div>
+        <div class="filename">assets/detection_pipeline.png</div>
+      </div>
+    </div>
+    <div class="card-grid-3" style="margin-top:1.5rem;">
+      <div class="card">
+        <h3>① CLAHE</h3>
+        <p>LAB L채널에 적용. 색 정보(A, B)는 유지한 채 밝기만 정규화 → 조명 변화에도 HSV 범위 안정적 유지</p>
+      </div>
+      <div class="card">
+        <h3>② HSV 마스킹</h3>
+        <p>흰색 상자 HSV 범위로 inRange. Morphology(CLOSE+OPEN)로 노이즈 제거 및 구멍 메움</p>
+      </div>
+      <div class="card">
+        <h3>③ minAreaRect</h3>
+        <p>최대 면적 윤곽선에서 최소 면적 회전 직사각형 추출. cx, cy, w, h, θ 획득</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ────────────────────────── 트러블슈팅 ────────────────────────── -->
+<section id="troubleshooting">
+  <div class="container">
+    <div class="section-label">HIL Troubleshooting</div>
+    <h2>체계적 오차 해결 2건</h2>
+    <p>통합 테스트에서 발견된 오차를 격리 스크립트로 원인을 확정했습니다.</p>
+
+    <div class="card-grid-2" style="margin-top:2.5rem;">
+      <!-- 트러블 1 -->
+      <div class="trouble-card">
+        <div class="trouble-header">
+          <span class="trouble-badge">Z축 +110 mm</span>
+          <span class="trouble-badge fixed">→ 0 mm</span>
+        </div>
+        <div class="trouble-body">
+          <dl>
+            <div class="trouble-row">
+              <dt>증상</dt>
+              <dd>로봇이 상자보다 정확히 110 mm 높은 공중을 파지 시도</dd>
+            </div>
+            <div class="trouble-row">
+              <dt>원인</dt>
+              <dd>z_surface 측정 시 그리퍼 tip이 상자에 닿은 상태에서 Flange 좌표를 읽음. Flange는 tip보다 그리퍼 길이(110 mm)만큼 위에 있으므로 z_surface 과대 측정</dd>
+            </div>
+            <div class="trouble-row">
+              <dt>보정</dt>
+              <dd>1차: 측정값에서 그리퍼 길이 수동 차감<br/>개선: set_end_type(1)로 TCP 좌표 직접 읽기</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+
+      <!-- 트러블 2 -->
+      <div class="trouble-card">
+        <div class="trouble-header">
+          <span class="trouble-badge">Y축 +16.3 mm</span>
+          <span class="trouble-badge fixed">→ &lt;0.95 mm</span>
+        </div>
+        <div class="trouble-body">
+          <dl>
+            <div class="trouble-row">
+              <dt>증상</dt>
+              <dd>X축은 정확한데 Y 방향으로만 일정하게 16.3 mm 편향</dd>
+            </div>
+            <div class="trouble-row">
+              <dt>원인</dt>
+              <dd>verify.py Step B로 알려진 위치에서 16.3 mm 재현 확인. 캘리브 bias + 카메라 브래킷 조립 공차 누적 추정</dd>
+            </div>
+            <div class="trouble-row">
+              <dt>보정</dt>
+              <dd>반복 측정에서 편향이 안정적으로 재현됨을 확인 → pick_offset_mm: [0, -16.3, 0] 정적 보정</dd>
+            </div>
+          </dl>
+          <!-- 📸 verify_step_b.png -->
+          <div class="img-placeholder" style="min-height:100px; margin-top:1rem; border-radius:8px;">
+            <div class="icon" style="font-size:1.2rem;">📊</div>
+            <div style="font-size:0.8rem;">verify.py Step B 출력 화면</div>
+            <div class="filename">assets/verify_step_b.png</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ────────────────────────── 데모 ────────────────────────── -->
+<section id="demo">
+  <div class="container">
+    <div class="section-label">Demo</div>
+    <h2>Pick & Place 동작 데모</h2>
+    <p>관측 자세 이동 → OBB 검출 → 좌표 변환 → 파지 → 후퇴 전체 사이클 (평균 12.62 s)</p>
+
+    <div style="margin-top:2rem;">
+      <div class="video-wrap">
+        <!--
+          YouTube 업로드 후 아래 iframe의 src를 교체하세요:
+          https://www.youtube.com/embed/[VIDEO_ID]
+        -->
+        <div class="video-placeholder">
+          <div class="play-icon">▶</div>
+          <div>파지 동작 영상</div>
+          <div style="font-family:var(--mono); font-size:0.8rem; color:var(--accent3);">YouTube 업로드 후 iframe src 교체</div>
+        </div>
+        <!-- 영상 업로드 후 아래 주석 해제:
+        <iframe src="https://www.youtube.com/embed/VIDEO_ID_HERE" allowfullscreen></iframe>
+        -->
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider" />
+
+<!-- ────────────────────────── 정량 결과 ────────────────────────── -->
+<section id="results">
+  <div class="container">
+    <div class="section-label">Quantitative Results</div>
+    <h2>정량 결과</h2>
+
+    <div class="card" style="margin-top:2rem; overflow:hidden; padding:0;">
+      <table class="metric-table">
+        <thead>
+          <tr><th>지표</th><th>결과</th><th>측정 방법</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>렌즈 왜곡 Reprojection RMS</td><td>0.257 px</td><td>Zhang's Method, 8×5 체커보드 30장 · 허용 &lt;0.5 px</td></tr>
+          <tr><td>Hand-Eye 캘리브레이션 잔차</td><td>1.245 mm</td><td>Tsai-Lenz 캘리브 데이터 기반 잔차 (동일 포즈 역산)</td></tr>
+          <tr><td>파지 좌표 평균 오차</td><td>&lt;0.95 mm</td><td>verify.py Step B 실측 · 허용 &lt;5.0 mm</td></tr>
+          <tr><td>비전 처리 지연</td><td>74.8 ms (avg) / 384.6 ms (max)</td><td>--measure-cycle 10회</td></tr>
+          <tr><td>Pick & Place 사이클 타임</td><td>12.62 s</td><td>--measure-cycle 10회</td></tr>
+          <tr><td>초기 파지 검증</td><td>8회 연속 성공 (n=8)</td><td>임의 위치 배치 8회 연속 실파지</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:3rem;">향후 개선 방향</h3>
+    <div style="display:flex; flex-direction:column; gap:1rem; margin-top:1rem;">
+      <div class="future-item">
+        <div class="future-num">01</div>
+        <div>
+          <strong>C++ 포팅</strong>
+          <p style="margin:0.25rem 0 0;">최대 384.6 ms 편차의 주요 원인은 Python GIL. core/를 Eigen + OpenCV C++로 재작성하면 20 ms 이내 예상. Clean Architecture 덕분에 core/만 교체하면 됩니다.</p>
+        </div>
+      </div>
+      <div class="future-item">
+        <div class="future-num">02</div>
+        <div>
+          <strong>Visual Servoing</strong>
+          <p style="margin:0.25rem 0 0;">현재 개루프(Open-loop) 제어. observe 자세에서 한 번 계산 후 이동. 폐루프 카메라 피드백으로 외부 섭동 대응 가능.</p>
+        </div>
+      </div>
+      <div class="future-item">
+        <div class="future-num">03</div>
+        <div>
+          <strong>ROS2 Lifecycle Node</strong>
+          <p style="margin:0.25rem 0 0;">현재 게이팅은 순차 코드 흐름에 의존. ROS2 표준 상태 머신으로 노드 재시작 시 안전한 초기화 확보.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ────────────────────────── 푸터 ────────────────────────── -->
+<footer>
+  <p>김진호 · ROS2 로봇 비전 파이프라인 · 2026</p>
+  <p style="margin-top:0.5rem;"><a href="https://github.com/your-username/roscamp" style="color:var(--accent); text-decoration:none;">GitHub Repository</a></p>
+</footer>
+
+</body>
+</html>

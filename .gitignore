@@ -11,7 +11,7 @@ __pycache__/
 build/
 install/
 log/
-docs/
+# docs/ is tracked for GitHub Pages
 develop-eggs/
 dist/
 downloads/
