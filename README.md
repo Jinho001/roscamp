@@ -387,5 +387,5 @@ jetcobot_vision_v2/
         │   ├── vision_params_front_jet.yaml  # Hand-Eye 행렬 및 캘리브 파라미터
         │   └── pick_place_profiles.yaml      # 동작 영역별 프로파일
         └── scripts/
-            └── verify.py                  # 단계별 좌표계 변환 격리 검증 도구
+            └── verify.py                  # 단계별 좌표계 변환 검증 도구
 ```
