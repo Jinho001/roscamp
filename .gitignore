@@ -172,3 +172,13 @@ Thumbs.db
 
 # Runtime logs
 nohup.out
+*.log
+
+# Personal / task tracking
+tasks/
+자료/
+
+# docs personal files (keep index.html and images/)
+docs/*.md
+docs/research/
+docs/docs/
