@@ -369,11 +369,7 @@ jetcobot_vision_v2/
 
 ```
 .
-├── docs/
-│   ├── case_study_mss.md                  # STAR 기법 기반 엔지니어링 케이스 스터디
-│   ├── vision_pipeline_tech_doc.md        # Zhang's Method / Tsai-Lenz 수학적 배경 문서
-│   └── personal_growth_tasks.md          # 개선 로드맵
-└── src/devices/jetcobot/common/
+└─ src/devices/jetcobot/common/
     ├── jetcobot_vision/                   # v1 배포판 ROS2 패키지
     │   └── jetcobot_vision/
     │       ├── coord_transform_node.py    # OBB → PickPoint 변환 ROS2 노드
