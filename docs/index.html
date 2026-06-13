@@ -874,7 +874,8 @@ X = cv2.calibrateHandEye(TSAI)</pre>
 
         <!-- 도전 3 -->
         <h3 style="margin-top:2rem">③ 이동 중 프레임 배제</h3>
-        <p>로봇 이동 중 캡처된 흔들린 프레임으로 OBB를 검출하면 좌표가 틀려 파지 실패로 이어집니다. <code>move_to()</code>가 완전히 반환돼 로봇이 완전히 정지한 이후에만 검출 결과를 읽도록 순차 실행으로 보장합니다.</p>
+        <p>로봇 이동 중 캡처된 흔들린 프레임으로 OBB를 검출하면 좌표가 틀려 파지 실패로 이어집니다. <code>move_to()</code>가 완전히 반환돼 로봇이 완전히 정지한 이후에만 검출 결과를
+          읽도록 순차 실행으로 보장합니다.</p>
         <pre><span class="cm"># nodes/vision_pick_place_node.py</span>
 self._motion.move_to(observe_pose)         <span class="cm"># blocking</span>
 flange = self._motion.get_flange_coords() <span class="cm"># Flange 좌표</span>
@@ -948,7 +949,8 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
               <dt>원인</dt>
               <dd>HSV는 색상 조건만 걸러냄. 같은 색 노이즈를 배제할 형태 기준이 없었음</dd>
               <dt>해결</dt>
-              <dd>컨투어마다 형태 필터 4종 적용: <strong>면적</strong>(3000~80000 px²) · <strong>폭/높이</strong> 범위 · <strong>종횡비</strong>(0.4~3.5) · <strong>solidity</strong>(&gt;0.6). 상자 4개만 정확 검출.</dd>
+              <dd>컨투어마다 형태 필터 4종 적용: <strong>면적</strong>(3000~80000 px²) · <strong>폭/높이</strong> 범위 ·
+                <strong>종횡비</strong>(0.4~3.5) · <strong>solidity</strong>(&gt;0.6). 상자 4개만 정확 검출.</dd>
               <dt>인사이트</dt>
               <dd>"색상은 필요조건, 형태는 충분조건" — HSV 단독으로는 같은 색 물체를 구분 불가</dd>
             </div>
@@ -965,7 +967,8 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
               <dt>원인</dt>
               <dd>ROS2 토픽은 이동 중에도 계속 흐름. 검출 노드가 로봇 정지 여부를 인지하지 못한 채 좌표를 발행</dd>
               <dt>해결</dt>
-              <dd>SetBool Service로 명시적 게이트 구현: 이동 전 <code>set_bool(False)</code>로 퍼블리시 차단 → 정지 확인 후 <code>set_bool(True)</code>로 재개 → 첫 유효 좌표 수신 → 픽업 전 재차단</dd>
+              <dd>SetBool Service로 명시적 게이트 구현: 이동 전 <code>set_bool(False)</code>로 퍼블리시 차단 → 정지 확인 후
+                <code>set_bool(True)</code>로 재개 → 첫 유효 좌표 수신 → 픽업 전 재차단</dd>
               <dt>인사이트</dt>
               <dd>"좌표는 로봇이 멈췄을 때만 유효" — 게이팅 패턴으로 이동/검출 간 타이밍 경쟁 조건 완전 제거</dd>
             </div>
@@ -983,17 +986,17 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
         <div class="two-col" style="margin-top:1.5rem">
           <div>
             <p style="font-size:13px;font-weight:600;margin-bottom:.5rem">① 10회 연속 파지 — OBB 검출 PiP</p>
-            <video controls style="width:100%;border-radius:8px;border:1px solid var(--border)">
+            <video controls style="width:100%;height:280px;object-fit:contain;background:#000;border-radius:8px;border:1px solid var(--border)">
               <source src="images/media1.mp4" type="video/mp4">
             </video>
-            <p class="img-caption">관측 캠 + OBB 검출 PiP 오버레이, 상자 10회 연속 파지</p>
+            <p class="img-caption" style="margin-top:.6rem">관측 캠 + OBB 검출 PiP 오버레이, 상자 10회 연속 파지 (4배속)</p>
           </div>
           <div>
             <p style="font-size:13px;font-weight:600;margin-bottom:.5rem">② AMR 트레이 Pick &amp; Place</p>
-            <video controls style="width:100%;border-radius:8px;border:1px solid var(--border)">
+            <video controls style="width:100%;height:280px;object-fit:contain;background:#000;border-radius:8px;border:1px solid var(--border)">
               <source src="images/media2.mp4" type="video/mp4">
             </video>
-            <p class="img-caption">상자를 집어 AMR 트레이에 옮기는 전체 사이클</p>
+            <p class="img-caption" style="margin-top:.6rem">상자를 집어 AMR 트레이에 옮기는 전체 사이클 (4배속)</p>
           </div>
         </div>
       </section>
@@ -1070,59 +1073,59 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
       </section>
 
       <section id="retrospective">
-      <h2>회고</h2>
+        <h2>회고</h2>
 
-      <h3>배운 점</h3>
-      <ul>
-        <li>
-          <strong>제약이 곧 설계다.</strong>
-          Depth 센서 없이 3D 좌표를 복원해야 한다는 제약이 있었고, "상자는 항상 테이블 위에 있다"는 물리적 사실 하나로
-          Ray-Plane Intersection을 풀 수 있었습니다.
-          주어진 조건 안에서 문제를 정확히 정의하면 복잡해 보이는 문제도 단순해진다는 걸 이번 프로젝트에서 직접 체감했습니다.
-        </li>
-        <li>
-          <strong>독립성 있는 코드가 디버깅 시간을 줄인다.</strong>
-          ROS2 노드로 작성하면 수정할 때마다 빌드·재시작이 필요하지만,
-          핵심 로직을 <code>core/</code>로 분리해두면 Python 스크립트로 바로 실행·검증이 가능합니다.
-          덕분에 캘리브레이션 수식 오류나 좌표 변환 버그를 로봇 없이 빠르게 찾아낼 수 있었습니다.
-        </li>
-        <li>
-          <strong>캘리브레이션은 시스템의 기반이다.</strong>
-          Hand-Eye 캘리브레이션 오차가 커지면 아무리 OBB 검출이 정확해도 파지 좌표가 틀립니다.
-          시스템 전체의 오차 예산을 먼저 설정하고, 각 단계의 허용 오차를 역산하는 방식으로 접근한 것이 유효했습니다.
-        </li>
-      </ul>
+        <h3>배운 점</h3>
+        <ul>
+          <li>
+            <strong>제약이 곧 설계다.</strong>
+            Depth 센서 없이 3D 좌표를 복원해야 한다는 제약이 있었고, "상자는 항상 테이블 위에 있다"는 물리적 사실 하나로
+            Ray-Plane Intersection을 풀 수 있었습니다.
+            주어진 조건 안에서 문제를 정확히 정의하면 복잡해 보이는 문제도 단순해진다는 걸 이번 프로젝트에서 직접 체감했습니다.
+          </li>
+          <li>
+            <strong>독립성 있는 코드가 디버깅 시간을 줄인다.</strong>
+            ROS2 노드로 작성하면 수정할 때마다 빌드·재시작이 필요하지만,
+            핵심 로직을 <code>core/</code>로 분리해두면 Python 스크립트로 바로 실행·검증이 가능합니다.
+            덕분에 캘리브레이션 수식 오류나 좌표 변환 버그를 로봇 없이 빠르게 찾아낼 수 있었습니다.
+          </li>
+          <li>
+            <strong>캘리브레이션은 시스템의 기반이다.</strong>
+            Hand-Eye 캘리브레이션 오차가 커지면 아무리 OBB 검출이 정확해도 파지 좌표가 틀립니다.
+            시스템 전체의 오차 예산을 먼저 설정하고, 각 단계의 허용 오차를 역산하는 방식으로 접근한 것이 유효했습니다.
+          </li>
+        </ul>
 
-      <h3 style="margin-top:2rem">아쉬운 점</h3>
-      <ul>
-        <li>
-          <strong>폐루프 제어를 구현하지 못했습니다.</strong>
-          현재는 촬영→계산→실행의 개루프(Open-loop) 구조라 파지 직전 로봇의 미세 떨림을 보정할 수 없습니다.
-          Visual Servoing으로 전환했다면 성공률을 더 높일 수 있었을 텐데, 부트캠프 일정 안에서 구현까지는 시간이 부족했습니다.
-        </li>
-        <li>
-          <strong>다양한 물체로 일반화하지 못했습니다.</strong>
-          HSV 기반 OBB 검출은 신발 상자처럼 단색·직육면체 물체에 최적화되어 있습니다.
-          불규칙한 형태나 반사 표면에서는 검출 성능이 떨어질 수 있어, 실제 매장 환경 일반화는 추가 작업이 필요합니다.
-        </li>
-        <li>
-          <strong>단독 통합 테스트 환경이 없었습니다.</strong>
-          AMR·FMS·UI 팀과 협업하면서 통합 테스트를 위해 항상 전체 시스템이 켜져 있어야 했습니다.
-          Mock 인터페이스를 만들어 두었다면 독립적으로 더 많은 케이스를 검증할 수 있었을 것입니다.
-        </li>
-      </ul>
+        <h3 style="margin-top:2rem">아쉬운 점</h3>
+        <ul>
+          <li>
+            <strong>폐루프 제어를 구현하지 못했습니다.</strong>
+            현재는 촬영→계산→실행의 개루프(Open-loop) 구조라 파지 직전 로봇의 미세 떨림을 보정할 수 없습니다.
+            Visual Servoing으로 전환했다면 성공률을 더 높일 수 있었을 텐데, 부트캠프 일정 안에서 구현까지는 시간이 부족했습니다.
+          </li>
+          <li>
+            <strong>다양한 물체로 일반화하지 못했습니다.</strong>
+            HSV 기반 OBB 검출은 신발 상자처럼 단색·직육면체 물체에 최적화되어 있습니다.
+            불규칙한 형태나 반사 표면에서는 검출 성능이 떨어질 수 있어, 실제 매장 환경 일반화는 추가 작업이 필요합니다.
+          </li>
+          <li>
+            <strong>단독 통합 테스트 환경이 없었습니다.</strong>
+            AMR·FMS·UI 팀과 협업하면서 통합 테스트를 위해 항상 전체 시스템이 켜져 있어야 했습니다.
+            Mock 인터페이스를 만들어 두었다면 독립적으로 더 많은 케이스를 검증할 수 있었을 것입니다.
+          </li>
+        </ul>
 
-      <h3 style="margin-top:2rem">프로젝트를 마치며</h3>
-      <p>
-        이번 프로젝트는 "로봇에게 눈을 달아준다"는 것이 단순히 카메라를 연결하는 문제가 아님을 알게 해 준 경험이었습니다.
-        좌표계 변환 하나하나, 캘리브레이션 포즈 수집 방식, 이미지 처리 파이프라인의 각 단계가 서로 맞물려 있어서
-        한 곳의 오차가 최종 파지 위치에까지 영향을 줬습니다.
-      </p>
-      <p style="margin-top:.75rem">
-        그 과정에서 가장 크게 느낀 것은, 좋은 엔지니어링은 문제가 생겼을 때 어디서 틀렸는지 빠르게 찾을 수 있는 구조를 미리 만들어 두는 것이라는 점입니다.
-        다음 프로젝트에서는 설계 초기부터 각 모듈의 검증 방법을 함께 정의하는 습관을 이어가려 합니다.
-      </p>
-    </section>
+        <h3 style="margin-top:2rem">프로젝트를 마치며</h3>
+        <p>
+          이번 프로젝트는 "로봇에게 눈을 달아준다"는 것이 단순히 카메라를 연결하는 문제가 아님을 알게 해 준 경험이었습니다.
+          좌표계 변환 하나하나, 캘리브레이션 포즈 수집 방식, 이미지 처리 파이프라인의 각 단계가 서로 맞물려 있어서
+          한 곳의 오차가 최종 파지 위치에까지 영향을 줬습니다.
+        </p>
+        <p style="margin-top:.75rem">
+          그 과정에서 가장 크게 느낀 것은, 좋은 엔지니어링은 문제가 생겼을 때 어디서 틀렸는지 빠르게 찾을 수 있는 구조를 미리 만들어 두는 것이라는 점입니다.
+          다음 프로젝트에서는 설계 초기부터 각 모듈의 검증 방법을 함께 정의하는 습관을 이어가려 합니다.
+        </p>
+      </section>
   </div><!-- /page -->
 
   <footer>
