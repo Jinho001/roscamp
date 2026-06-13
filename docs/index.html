@@ -8,6 +8,10 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet" />
+  <script>
+    MathJax = { tex: { inlineMath: [['$', '$']] }, svg: { fontCache: 'global' } };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
   <style>
     *,
     *::before,
@@ -98,7 +102,7 @@
 
     /* ── layout ── */
     .page {
-      max-width: 860px;
+      max-width: 1000px;
       margin: 0 auto;
       padding: 0 2rem;
     }
@@ -655,6 +659,7 @@
       <a href="#challenges">기술 상세</a>
       <a href="#troubleshooting">트러블슈팅</a>
       <a href="#results">결과</a>
+      <a href="#retrospective">회고</a>
     </div>
     <a class="gh" href="https://github.com/Jinho001/roscamp" target="_blank">GitHub →</a>
   </nav>
@@ -758,7 +763,7 @@
         </tr>
         <tr>
           <td>ROS2 아키텍처 설계</td>
-          <td>핵심 로직을 ROS2와 분리해 설계, 로봇 없이도 알고리즘 단독 검증 가능한 구조 구현</td>
+          <td>핵심 로직을 <code>core/</code>로 분리해 ROS2 빌드 없이 Python 스크립트로 바로 실행·검증 가능한 구조 구현</td>
         </tr>
       </table>
 
@@ -772,7 +777,7 @@
         <span class="badge gray">FastAPI</span>
         <span class="badge gray">Tsai-Lenz</span>
         <span class="badge gray">Ray-Plane Intersection</span>
-        <span class="badge gray">Ubuntu 22.04</span>
+        <span class="badge gray">Ubuntu 24.04</span>
       </div>
 
       <h3 style="margin-top:2rem">성과 및 기대효과</h3>
@@ -816,228 +821,308 @@
             <td>Ray-Plane Intersection으로 3D 좌표 복원</td>
           </tr>
           <tr>
-            <td>데이터셋 없음</td>
-            <td>딥러닝 학습 불가</td>
-            <td>OpenCV HSV + 기하학적 알고리즘</td>
+            <td>단색·직육면체 상자</td>
+            <td>색상·형태 조건이 단순해 규칙 기반 검출 가능</td>
+            <td>HSV 이진화 → 윤곽선 추출 → <code>minAreaRect</code> OBB 검출</td>
           </tr>
           <tr>
             <td>팀 공유 로봇</td>
-            <td>원격에서 검증 수단 필요</td>
-            <td>ROS2 의존성 없는 core</td>
+            <td>로봇 점유 없이 알고리즘 반복 수정 필요</td>
+            <td>ROS2 빌드 없이 Python 스크립트로 바로 실행 가능한 <code>core/</code> 분리</td>
           </tr>
         </table>
-      </section>
-      <!-- 도전 1 -->
-      <h3 style="margin-top:1.5rem">① Depth 센서 없이 3D 좌표 복원</h3>
-      <p><strong>Ray-Plane Intersection</strong> — "상자는 항상 Z_surface 위에 있다"는 물리적 제약 하나가 광선과 평면의 교점을 유일하게 결정합니다.</p>
-      <pre><span class="cm"># core/coord_transform.py</span>
+
+        <!-- 도전 1 -->
+        <h3 style="margin-top:1.5rem">① Depth 센서 없이 3D 좌표 복원</h3>
+        <p><strong>Ray-Plane Intersection</strong> — "상자는 항상 Z_surface 위에 있다"는 물리적 제약 하나가 광선과 평면의 교점을 유일하게 결정합니다.</p>
+        <pre><span class="cm"># core/coord_transform.py</span>
 ray_c = K_inv @ [cx, cy, 1.0]
 ray_b = R @ ray_c
 t = (z_surface - origin[2]) / ray_b[2]
 P = origin + t * ray_b   <span class="cm"># mm</span></pre>
-      <p>오차 허용 기준 <strong>≤5 mm</strong> — 그리퍼 파지 폭(약 40 mm)의 1/8 이내면 파지에 영향 없다는 오차 예산으로 설정. 트레이드오프: 물체가 평면 위에 있다는 도메인
-        가정 필요.</p>
+        <p style="margin-top:.75rem;font-size:13px;color:var(--muted)">
+          픽셀 좌표 $(c_x, c_y)$를 카메라 내부 파라미터 $K$로 역투영해 카메라 공간의 단위 광선을 구하고,
+          Hand-Eye 행렬 $R$로 로봇 베이스 공간으로 변환합니다.<br>
 
-      <!-- 도전 2 -->
-      <h3 style="margin-top:2rem">② Hand-Eye 캘리브레이션</h3>
-      <p><strong>AX = XB (Tsai-Lenz)</strong>, 25포즈, Hand-Eye RMS 오차 1.245 mm.</p>
-      <pre><span class="cm"># 각 자세마다</span>
+          광선의 파라미터 $t$는 "광선이 테이블 평면 $Z = Z_{surface}$와 만나는 지점"에서 결정되며,
+          최종 3D 파지 좌표 $P$를 얻습니다.<br>
+          $$\mathbf{r}_c = K^{-1}\begin{bmatrix}c_x\\c_y\\1\end{bmatrix}, \quad
+          \mathbf{r}_b = R\,\mathbf{r}_c, \quad
+          t = \frac{Z_{surface} - o_z}{r_{b,z}}, \quad
+          P = \mathbf{o} + t\,\mathbf{r}_b$$
+        </p>
+        <p>오차 허용 기준 <strong>≤5 mm</strong> — 그리퍼 파지 폭(약 40 mm)의 1/8 이내면 파지에 영향 없다는 오차 예산으로 설정. 트레이드오프: 물체가 평면 위에 있다는 도메인
+          가정 필요.</p>
+
+        <!-- 도전 2 -->
+        <h3 style="margin-top:2rem">② Hand-Eye 캘리브레이션</h3>
+        <p><strong>AX = XB (Tsai-Lenz)</strong>, 25포즈, Hand-Eye RMS 오차 1.245 mm.</p>
+        <pre><span class="cm"># 각 자세마다</span>
 A_i = T_base2flange   <span class="cm"># 관절각 → FK</span>
 B_i = T_cam2board     <span class="cm"># solvePnP</span>
 <span class="cm"># 25쌍 → Tsai-Lenz</span>
 X = cv2.calibrateHandEye(TSAI)</pre>
-      <p><strong>왜 Flange 기준인가:</strong> TCP는 그리퍼에 따라 달라지는 가변값. Flange는 공구 교체와 무관한 고정점이므로 그리퍼 교체 후에도 재캘리브레이션 불필요.</p>
+        <p style="margin-top:.75rem;font-size:13px;color:var(--muted)">
+          로봇이 자세를 바꿀 때마다 Flange 기준 변환 $A_i$와 카메라 기준 변환 $B_i$를 쌍으로 수집합니다.
+          두 변환은 구하려는 Hand-Eye 행렬 $X$에 대해 아래 관계를 만족하며,
+          25쌍의 방정식을 Tsai-Lenz 알고리즘으로 연립해 $X$를 추정합니다.
+          $$A_i X = X B_i \quad (i = 1, \dots, 25)$$
+          $$X = T_{\text{flange} \to \text{cam}} \quad \text{(카메라가 Flange에 고정된 Eye-in-Hand 구성)}$$
+        </p>
+        <p><strong>왜 Flange 기준인가:</strong> TCP는 그리퍼에 따라 달라지는 가변값.<br>
+          Flange는 공구 교체와 무관한 고정점이므로 그리퍼 교체 후에도 재캘리브레이션 불필요.</p>
 
-      <!-- 도전 3 -->
-      <h3 style="margin-top:2rem">③ 이동 중 프레임 배제</h3>
-      <p>로봇 이동 중 캡처된 OBB 결과를 사용하면 오파지 발생. <code>move_to()</code>가 완전히 반환된 이후에만 검출을 폴링하도록 순차 실행으로 보장.</p>
-      <pre><span class="cm"># nodes/vision_pick_place_node.py</span>
+        <!-- 도전 3 -->
+        <h3 style="margin-top:2rem">③ 이동 중 프레임 배제</h3>
+        <p>로봇 이동 중 캡처된 흔들린 프레임으로 OBB를 검출하면 좌표가 틀려 파지 실패로 이어집니다. <code>move_to()</code>가 완전히 반환돼 로봇이 완전히 정지한 이후에만 검출 결과를 읽도록 순차 실행으로 보장합니다.</p>
+        <pre><span class="cm"># nodes/vision_pick_place_node.py</span>
 self._motion.move_to(observe_pose)         <span class="cm"># blocking</span>
 flange = self._motion.get_flange_coords() <span class="cm"># Flange 좌표</span>
 self._transformer.update_pose(flange)     <span class="cm"># T_base2cam 재계산</span>
 obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지 후 첫 프레임</span></pre>
 
-      <!-- 도전 4 -->
-      <h3 style="margin-top:2rem">④ Clean Architecture (v1 → v2)</h3>
-      <p>v1에서는 좌표 변환 코드가 ROS2 노드에 묶여 수정할 때마다 로봇 연결 + ROS2 부팅이 필요했습니다. v2에서 core/Node를 분리했습니다.</p>
-      <table>
-        <tr>
-          <th>항목</th>
-          <th>v1 (ROS2 모놀리식)</th>
-          <th>v2 (Core/Node 분리)</th>
-        </tr>
-        <tr>
-          <td>수정 → 검증</td>
-          <td>로봇 연결 + ROS2 부팅 (수 분)</td>
-          <td><code>python verify.py</code> 단독 (수 초)</td>
-        </tr>
-        <tr>
-          <td>단위 테스트</td>
-          <td>불가 (rclpy 의존)</td>
-          <td>가능</td>
-        </tr>
-        <tr>
-          <td>C++ 포팅 범위</td>
-          <td>전체 재작성</td>
-          <td>core/ 만</td>
-        </tr>
-      </table>
-    </section>
+        <!-- 도전 4 -->
+        <h3 style="margin-top:2rem">④ Clean Architecture (v1 → v2)</h3>
+        <p>v1에서는 좌표 변환 코드가 ROS2 노드에 묶여 수정할 때마다 로봇 연결 + ROS2 부팅이 필요했습니다. v2에서 core/Node를 분리했습니다.</p>
+        <table>
+          <tr>
+            <th>항목</th>
+            <th>v1 (ROS2 모놀리식)</th>
+            <th>v2 (Core/Node 분리)</th>
+          </tr>
+          <tr>
+            <td>수정 → 검증</td>
+            <td>로봇 연결 + ROS2 부팅 (수 분)</td>
+            <td><code>python verify.py</code> 단독 (수 초)</td>
+          </tr>
+          <tr>
+            <td>단위 테스트</td>
+            <td>불가 (rclpy 의존)</td>
+            <td>가능</td>
+          </tr>
+        </table>
+      </section>
 
-    <!-- OBB 검출 -->
-    <section>
-      <div class="label">Detection Pipeline</div>
-      <h2>OBB 검출 파이프라인</h2>
-      <p>흰색 단색 상자 환경에서 딥러닝보다 빠르고 파라미터 조정이 직관적인 OpenCV 파이프라인.</p>
-      <table>
-        <tr>
-          <th>단계</th>
-          <th>내용</th>
-        </tr>
-        <tr>
-          <td>① LAB CLAHE</td>
-          <td>L채널(밝기)에만 CLAHE 적용. 색 정보(A, B) 유지한 채 조명 정규화 → HSV 범위 안정화</td>
-        </tr>
-        <tr>
-          <td>② HSV 마스킹</td>
-          <td>흰색 상자 HSV 범위 inRange. Morphology(CLOSE+OPEN)로 노이즈 제거 및 구멍 메움</td>
-        </tr>
-        <tr>
-          <td>③ minAreaRect</td>
-          <td>최대 면적 윤곽선에서 최소 면적 회전 직사각형 추출 → cx, cy, w, h, θ</td>
-        </tr>
-      </table>
-      <img src="images/pipeline_obb.png" alt="Raw → HSV Binary → Morphology → 최종 OBB 4단계 비교" class="img-full">
-      <p class="img-caption">Raw → HSV Binary → Morphology → 최종 OBB 검출 결과 비교</p>
-    </section>
+      <!-- OBB 검출 -->
+      <section id="obb-pipeline">
+        <div class="label">Detection Pipeline</div>
+        <h2>OBB 검출 파이프라인</h2>
+        <p>흰색 단색 상자 환경에서 딥러닝보다 빠르고 파라미터 조정이 직관적인 OpenCV 파이프라인.</p>
+        <table>
+          <tr>
+            <th>단계</th>
+            <th>내용</th>
+          </tr>
+          <tr>
+            <td>① LAB CLAHE</td>
+            <td>L채널(밝기)에만 CLAHE 적용. 색 정보(A, B) 유지한 채 조명 정규화 → HSV 범위 안정화</td>
+          </tr>
+          <tr>
+            <td>② HSV 마스킹</td>
+            <td>흰색 상자 HSV 범위 inRange. Morphology(CLOSE+OPEN)로 노이즈 제거 및 구멍 메움</td>
+          </tr>
+          <tr>
+            <td>③ minAreaRect</td>
+            <td>최대 면적 윤곽선에서 최소 면적 회전 직사각형 추출 → cx, cy, w, h, θ</td>
+          </tr>
+        </table>
+        <img src="images/pipeline_obb.png" alt="Raw → HSV Binary → Morphology → 최종 OBB 4단계 비교" class="img-full">
+        <p class="img-caption">Raw → HSV Binary → Morphology → 최종 OBB 검출 결과 비교</p>
+      </section>
 
-    <!-- 트러블슈팅 -->
-    <section id="troubleshooting">
-      <div class="label">HIL Troubleshooting</div>
-      <h2>체계적 오차 해결 2건</h2>
-      <p>격리 스크립트로 추측 없이 원인을 확정했습니다.</p>
+      <!-- 트러블슈팅 -->
+      <section id="troubleshooting">
+        <div class="label">Troubleshooting</div>
+        <h2>문제 해결 2건</h2>
 
-      <div class="ts-grid">
-        <div class="ts-card">
-          <div class="ts-head">
-            <span class="before">Z축 +110 mm</span> → <span class="after">0 mm</span>
+        <div class="ts-grid">
+
+          <!-- CASE 1 -->
+          <div class="ts-card">
+            <div class="ts-head">
+              <span class="before">HSV 노이즈 오인식</span> → <span class="after">형태 필터로 억제</span>
+            </div>
+            <div class="ts-body">
+              <dt>증상</dt>
+              <dd>HSV 범위만으로 검출 시 바닥·벽·조명 반사 등 상자가 아닌 영역도 컨투어로 잡혀 잘못된 중심점 → 오픽업 발생</dd>
+              <dt>원인</dt>
+              <dd>HSV는 색상 조건만 걸러냄. 같은 색 노이즈를 배제할 형태 기준이 없었음</dd>
+              <dt>해결</dt>
+              <dd>컨투어마다 형태 필터 4종 적용: <strong>면적</strong>(3000~80000 px²) · <strong>폭/높이</strong> 범위 · <strong>종횡비</strong>(0.4~3.5) · <strong>solidity</strong>(&gt;0.6). 상자 4개만 정확 검출.</dd>
+              <dt>인사이트</dt>
+              <dd>"색상은 필요조건, 형태는 충분조건" — HSV 단독으로는 같은 색 물체를 구분 불가</dd>
+            </div>
           </div>
-          <div class="ts-body">
-            <dt>증상</dt>
-            <dd>로봇이 상자보다 정확히 110 mm 높은 공중을 파지 시도</dd>
-            <dt>원인</dt>
-            <dd>z_surface 측정 시 그리퍼 tip이 상자에 닿은 상태에서 Flange 좌표를 읽음. Flange는 tip보다 그리퍼 길이(110 mm) 위 → z_surface 과대 측정 →
-              Ray-Plane 결과 전체 +110 mm</dd>
-            <dt>보정</dt>
-            <dd>1차: 측정값에서 그리퍼 길이 수동 차감 / 개선: <code>set_end_type(1)</code> TCP 모드로 전환 후 측정</dd>
+
+          <!-- CASE 2 -->
+          <div class="ts-card">
+            <div class="ts-head">
+              <span class="before">이동 중 흔들린 좌표 → 오픽업</span> → <span class="after">게이팅으로 차단</span>
+            </div>
+            <div class="ts-body">
+              <dt>증상</dt>
+              <dd>로봇 이동 중 흔들린 프레임에서 OBB 좌표가 퍼블리시되어 목표 위치가 틀어진 채 픽업 시도</dd>
+              <dt>원인</dt>
+              <dd>ROS2 토픽은 이동 중에도 계속 흐름. 검출 노드가 로봇 정지 여부를 인지하지 못한 채 좌표를 발행</dd>
+              <dt>해결</dt>
+              <dd>SetBool Service로 명시적 게이트 구현: 이동 전 <code>set_bool(False)</code>로 퍼블리시 차단 → 정지 확인 후 <code>set_bool(True)</code>로 재개 → 첫 유효 좌표 수신 → 픽업 전 재차단</dd>
+              <dt>인사이트</dt>
+              <dd>"좌표는 로봇이 멈췄을 때만 유효" — 게이팅 패턴으로 이동/검출 간 타이밍 경쟁 조건 완전 제거</dd>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- 데모 -->
+      <section>
+        <div class="label">Demo</div>
+        <h2>Pick &amp; Place 동작 데모</h2>
+        <p>관측 자세 이동 → OBB 검출 → 좌표 변환 → 파지 → 후퇴 전체 사이클 (평균 12.62 s)</p>
+
+        <div class="two-col" style="margin-top:1.5rem">
+          <div>
+            <p style="font-size:13px;font-weight:600;margin-bottom:.5rem">① 10회 연속 파지 — OBB 검출 PiP</p>
+            <video controls style="width:100%;border-radius:8px;border:1px solid var(--border)">
+              <source src="images/media1.mp4" type="video/mp4">
+            </video>
+            <p class="img-caption">관측 캠 + OBB 검출 PiP 오버레이, 상자 10회 연속 파지</p>
+          </div>
+          <div>
+            <p style="font-size:13px;font-weight:600;margin-bottom:.5rem">② AMR 트레이 Pick &amp; Place</p>
+            <video controls style="width:100%;border-radius:8px;border:1px solid var(--border)">
+              <source src="images/media2.mp4" type="video/mp4">
+            </video>
+            <p class="img-caption">상자를 집어 AMR 트레이에 옮기는 전체 사이클</p>
           </div>
         </div>
+      </section>
 
-        <div class="ts-card">
-          <div class="ts-head">
-            <span class="before">Y축 +16.3 mm</span> → <span class="after">허용 기준 내</span>
-          </div>
-          <div class="ts-body">
-            <dt>증상</dt>
-            <dd>X축은 정확한데 Y 방향으로만 일정하게 16.3 mm 편향</dd>
-            <dt>원인</dt>
-            <dd>verify.py Step B로 알려진 위치에서 16.3 mm 재현 확인. Tsai-Lenz local minima 수렴 + 카메라 브래킷 조립 공차 누적 추정</dd>
-            <dt>보정</dt>
-            <dd>반복 측정에서 편향이 안정적으로 재현 → <code>pick_offset_mm: [0, -16.3, 0]</code> 정적 보정</dd>
-          </div>
-        </div>
-      </div>
+      <!-- 결과 -->
+      <section id="results">
+        <div class="label">Results</div>
+        <h2>정량 결과</h2>
+
+        <table>
+          <tr>
+            <th>지표</th>
+            <th style="text-align:center">결과</th>
+            <th>측정 방법</th>
+            <th>허용 기준</th>
+          </tr>
+          <tr>
+            <td>렌즈 왜곡 Reprojection RMS</td>
+            <td class="val">0.257 px</td>
+            <td>Zhang's Method, 체커보드 30장</td>
+            <td>&lt;0.5 px</td>
+          </tr>
+          <tr>
+            <td>Hand-Eye 캘리브레이션 잔차</td>
+            <td class="val">1.245 mm</td>
+            <td>Tsai-Lenz 캘리브 데이터 기반 잔차</td>
+            <td>&lt;5.0 mm</td>
+          </tr>
+          <tr>
+            <td>파지 좌표 평균 오차</td>
+            <td class="val">≤5 mm</td>
+            <td>그리퍼 폭 기준 오차 예산 설정 (verify.py Step B)</td>
+            <td>&lt;5.0 mm</td>
+          </tr>
+          <tr>
+            <td>비전 처리 지연</td>
+            <td class="val">40.4 ms</td>
+            <td>--measure-cycle 10회, 초기 로딩 이상치(384.6 ms) 제외 9회 평균</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>Pick &amp; Place 사이클 타임</td>
+            <td class="val">12.62 s</td>
+            <td>--measure-cycle 10회</td>
+            <td>—</td>
+          </tr>
+        </table>
+
+        <h3 style="margin-top:2rem">향후 개선 방향</h3>
+        <table style="margin-top:.75rem">
+          <tr>
+            <th>#</th>
+            <th>항목</th>
+            <th>근거</th>
+          </tr>
+          <tr>
+            <td>01</td>
+            <td>C++ 포팅</td>
+            <td>Python 런타임 오버헤드로 인해 편차 발생<br>
+              core/를 Eigen + OpenCV C++로 재작성하면 20 ms 이내 예상.</td>
+          </tr>
+          <tr>
+            <td>02</td>
+            <td>Visual Servoing</td>
+            <td>현재 개루프(Open-loop) 제어. <br>
+              카메라 피드백 기반 폐루프로 전환하면 로봇 흔들림이나 위치 오차에 실시간 대응 가능.</td>
+          </tr>
+          <tr>
+            <td>03</td>
+            <td>ROS2 Lifecycle Node</td>
+            <td>현재 게이팅은 순차 코드 흐름에 의존. ROS2 표준 상태 머신으로 안전한 초기화 확보.</td>
+          </tr>
+        </table>
+      </section>
+
+      <section id="retrospective">
+      <h2>회고</h2>
+
+      <h3>배운 점</h3>
+      <ul>
+        <li>
+          <strong>제약이 곧 설계다.</strong>
+          Depth 센서 없이 3D 좌표를 복원해야 한다는 제약이 있었고, "상자는 항상 테이블 위에 있다"는 물리적 사실 하나로
+          Ray-Plane Intersection을 풀 수 있었습니다.
+          주어진 조건 안에서 문제를 정확히 정의하면 복잡해 보이는 문제도 단순해진다는 걸 이번 프로젝트에서 직접 체감했습니다.
+        </li>
+        <li>
+          <strong>독립성 있는 코드가 디버깅 시간을 줄인다.</strong>
+          ROS2 노드로 작성하면 수정할 때마다 빌드·재시작이 필요하지만,
+          핵심 로직을 <code>core/</code>로 분리해두면 Python 스크립트로 바로 실행·검증이 가능합니다.
+          덕분에 캘리브레이션 수식 오류나 좌표 변환 버그를 로봇 없이 빠르게 찾아낼 수 있었습니다.
+        </li>
+        <li>
+          <strong>캘리브레이션은 시스템의 기반이다.</strong>
+          Hand-Eye 캘리브레이션 오차가 커지면 아무리 OBB 검출이 정확해도 파지 좌표가 틀립니다.
+          시스템 전체의 오차 예산을 먼저 설정하고, 각 단계의 허용 오차를 역산하는 방식으로 접근한 것이 유효했습니다.
+        </li>
+      </ul>
+
+      <h3 style="margin-top:2rem">아쉬운 점</h3>
+      <ul>
+        <li>
+          <strong>폐루프 제어를 구현하지 못했습니다.</strong>
+          현재는 촬영→계산→실행의 개루프(Open-loop) 구조라 파지 직전 로봇의 미세 떨림을 보정할 수 없습니다.
+          Visual Servoing으로 전환했다면 성공률을 더 높일 수 있었을 텐데, 부트캠프 일정 안에서 구현까지는 시간이 부족했습니다.
+        </li>
+        <li>
+          <strong>다양한 물체로 일반화하지 못했습니다.</strong>
+          HSV 기반 OBB 검출은 신발 상자처럼 단색·직육면체 물체에 최적화되어 있습니다.
+          불규칙한 형태나 반사 표면에서는 검출 성능이 떨어질 수 있어, 실제 매장 환경 일반화는 추가 작업이 필요합니다.
+        </li>
+        <li>
+          <strong>단독 통합 테스트 환경이 없었습니다.</strong>
+          AMR·FMS·UI 팀과 협업하면서 통합 테스트를 위해 항상 전체 시스템이 켜져 있어야 했습니다.
+          Mock 인터페이스를 만들어 두었다면 독립적으로 더 많은 케이스를 검증할 수 있었을 것입니다.
+        </li>
+      </ul>
+
+      <h3 style="margin-top:2rem">프로젝트를 마치며</h3>
+      <p>
+        이번 프로젝트는 "로봇에게 눈을 달아준다"는 것이 단순히 카메라를 연결하는 문제가 아님을 알게 해 준 경험이었습니다.
+        좌표계 변환 하나하나, 캘리브레이션 포즈 수집 방식, 이미지 처리 파이프라인의 각 단계가 서로 맞물려 있어서
+        한 곳의 오차가 최종 파지 위치에까지 영향을 줬습니다.
+      </p>
+      <p style="margin-top:.75rem">
+        그 과정에서 가장 크게 느낀 것은, 좋은 엔지니어링은 문제가 생겼을 때 어디서 틀렸는지 빠르게 찾을 수 있는 구조를 미리 만들어 두는 것이라는 점입니다.
+        다음 프로젝트에서는 설계 초기부터 각 모듈의 검증 방법을 함께 정의하는 습관을 이어가려 합니다.
+      </p>
     </section>
-
-    <!-- 데모 -->
-    <section>
-      <div class="label">Demo</div>
-      <h2>Pick &amp; Place 동작 데모</h2>
-      <p>관측 자세 이동 → OBB 검출 → 좌표 변환 → 파지 → 후퇴 전체 사이클 (평균 12.62 s)</p>
-
-      <img src="images/coord_transform.png" alt="좌표 변환 파이프라인 다이어그램" class="img-full">
-      <p class="img-caption">Camera (u,v,d) → Hand-Eye Calibration → Forward Kinematics → Robot Base 좌표 변환 흐름</p>
-
-      <div class="demo-box">
-        <!-- YouTube 업로드 후 아래 주석 해제:
-    <iframe style="width:100%;height:100%;border-radius:8px" src="https://www.youtube.com/embed/VIDEO_ID" allowfullscreen></iframe>
-    -->
-        <div class="play">▶</div>
-        <span>전체 사이클 영상 — YouTube 업로드 후 iframe src 교체</span>
-      </div>
-    </section>
-
-    <!-- 결과 -->
-    <section id="results">
-      <div class="label">Results</div>
-      <h2>정량 결과</h2>
-
-      <table>
-        <tr>
-          <th>지표</th>
-          <th style="text-align:center">결과</th>
-          <th>측정 방법</th>
-          <th>허용 기준</th>
-        </tr>
-        <tr>
-          <td>렌즈 왜곡 Reprojection RMS</td>
-          <td class="val">0.257 px</td>
-          <td>Zhang's Method, 체커보드 30장</td>
-          <td>&lt;0.5 px</td>
-        </tr>
-        <tr>
-          <td>Hand-Eye 캘리브레이션 잔차</td>
-          <td class="val">1.245 mm</td>
-          <td>Tsai-Lenz 캘리브 데이터 기반 잔차</td>
-          <td>&lt;5.0 mm</td>
-        </tr>
-        <tr>
-          <td>파지 좌표 평균 오차</td>
-          <td class="val">≤5 mm</td>
-          <td>그리퍼 폭 기준 오차 예산 설정 (verify.py Step B)</td>
-          <td>&lt;5.0 mm</td>
-        </tr>
-        <tr>
-          <td>비전 처리 지연</td>
-          <td class="val">40.4 ms</td>
-          <td>--measure-cycle 10회, 초기 로딩 이상치(384.6 ms) 제외 9회 평균</td>
-          <td>—</td>
-        </tr>
-        <tr>
-          <td>Pick &amp; Place 사이클 타임</td>
-          <td class="val">12.62 s</td>
-          <td>--measure-cycle 10회</td>
-          <td>—</td>
-        </tr>
-      </table>
-
-      <h3 style="margin-top:2rem">향후 개선 방향</h3>
-      <table style="margin-top:.75rem">
-        <tr>
-          <th>#</th>
-          <th>항목</th>
-          <th>근거</th>
-        </tr>
-        <tr>
-          <td>01</td>
-          <td>C++ 포팅</td>
-          <td>Python 런타임 오버헤드로 인해 편차 발생<br>
-            core/를 Eigen + OpenCV C++로 재작성하면 20 ms 이내 예상.</td>
-        </tr>
-        <tr>
-          <td>02</td>
-          <td>Visual Servoing</td>
-          <td>현재 개루프(Open-loop) 제어. <br>
-            카메라 피드백 기반 폐루프로 전환하면 로봇 흔들림이나 위치 오차에 실시간 대응 가능.</td>
-        </tr>
-        <tr>
-          <td>03</td>
-          <td>ROS2 Lifecycle Node</td>
-          <td>현재 게이팅은 순차 코드 흐름에 의존. ROS2 표준 상태 머신으로 안전한 초기화 확보.</td>
-        </tr>
-      </table>
-    </section>
-
   </div><!-- /page -->
 
   <footer>
