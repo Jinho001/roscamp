@@ -137,7 +137,7 @@ flowchart TD
 |---|---|---|
 | **비용** | USB 카메라 1대 | RealSense D435 약 25만 원 추가 |
 | **설치** | Eye-in-Hand 경량 마운트 유지 | 부피·무게 증가로 6-DOF 작업 영역 축소 |
-| **파지 정밀도** | 실측 **Δx < 0.95 mm** | PointCloud 노이즈 약 2~5 mm (근거리) |
+| **파지 정밀도** | 실측 **Δx < 5 mm** | PointCloud 노이즈 약 2~5 mm (근거리) |
 | **전제 조건** | 상자가 알려진 Z-plane 위에 놓여야 함 | 없음 |
 
 **결정 근거**: 상자가 항상 작업 평면($Z = Z_{surface}$) 위에 놓인다는 물리적 제약을 수학적 구속 조건으로 전환하면 Depth 센서 없이 XY 좌표를 역산할 수 있습니다. `verify.py` Step B로 실측 검증했습니다.
@@ -369,11 +369,7 @@ jetcobot_vision_v2/
 
 ```
 .
-├── docs/
-│   ├── case_study_mss.md                  # STAR 기법 기반 엔지니어링 케이스 스터디
-│   ├── vision_pipeline_tech_doc.md        # Zhang's Method / Tsai-Lenz 수학적 배경 문서
-│   └── personal_growth_tasks.md          # 개선 로드맵
-└── src/devices/jetcobot/common/
+└─ src/devices/jetcobot/common/
     ├── jetcobot_vision/                   # v1 배포판 ROS2 패키지
     │   └── jetcobot_vision/
     │       ├── coord_transform_node.py    # OBB → PickPoint 변환 ROS2 노드
@@ -391,5 +387,5 @@ jetcobot_vision_v2/
         │   ├── vision_params_front_jet.yaml  # Hand-Eye 행렬 및 캘리브 파라미터
         │   └── pick_place_profiles.yaml      # 동작 영역별 프로파일
         └── scripts/
-            └── verify.py                  # 단계별 좌표계 변환 격리 검증 도구
+            └── verify.py                  # 단계별 좌표계 변환 검증 도구
 ```
