@@ -697,7 +697,7 @@
           <div class="lbl">Hand-Eye 잔차</div>
         </div>
         <div class="kpi">
-          <div class="val">&lt;5 mm</div>
+          <div class="val">≤5 mm</div>
           <div class="lbl">파지 좌표 오차</div>
         </div>
         <div class="kpi">
@@ -788,7 +788,7 @@
         </tr>
         <tr>
           <td>파지 좌표 오차</td>
-          <td class="val">&lt;5 mm</td>
+          <td class="val">≤5 mm</td>
         </tr>
         <tr>
           <td>Pick &amp; Place 사이클 타임</td>
@@ -851,7 +851,8 @@ P = origin + t * ray_b   <span class="cm"># mm</span></pre>
           t = \frac{Z_{surface} - o_z}{r_{b,z}}, \quad
           P = \mathbf{o} + t\,\mathbf{r}_b$$
         </p>
-        <p>오차 허용 기준 <strong>≤5 mm</strong> — 그리퍼 파지 폭(약 40 mm)의 1/8 이내면 파지에 영향 없다는 오차 예산으로 설정. 트레이드오프: 물체가 평면 위에 있다는 도메인
+        <p>오차 허용 기준 <strong>≤5 mm</strong> — 그리퍼 파지 폭(약 40 mm)의 1/8 이내면 파지에 영향 없다는 오차 예산으로 설정. <br>
+          트레이드오프: 물체가 평면 위에 있다는 도메인
           가정 필요.</p>
 
         <!-- 도전 2 -->
@@ -888,7 +889,7 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
         <table>
           <tr>
             <th>항목</th>
-            <th>v1 (ROS2 모놀리식)</th>
+            <th>v1 (ROS2 단일 노드 구조)</th>
             <th>v2 (Core/Node 분리)</th>
           </tr>
           <tr>
@@ -950,7 +951,7 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
               <dd>HSV는 색상 조건만 걸러냄. 같은 색 노이즈를 배제할 형태 기준이 없었음</dd>
               <dt>해결</dt>
               <dd>컨투어마다 형태 필터 4종 적용 : <br>
-                <strong>면적</strong>(10000~20000 px²) · <strong>폭/높이</strong> 범위 ·
+                <strong>면적</strong>(10000~20000 px²) · <strong>폭/높이</strong> 범위<br>
                 <strong>종횡비</strong>(0.4~3.5) · <strong>solidity</strong>(&gt;0.6).
               </dd>
               <dt>인사이트</dt>
@@ -961,20 +962,19 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
           <!-- CASE 2 -->
           <div class="ts-card">
             <div class="ts-head">
-              <span class="before">이동 중 흔들린 좌표 → 오픽업</span> → <span class="after">게이팅으로 차단</span>
+              <span class="before">이동 중 흔들린 좌표 → 오픽업</span> → <span class="after">순차 실행으로 차단</span>
             </div>
             <div class="ts-body">
               <dt>증상</dt>
-              <dd>로봇 이동 중 흔들린 프레임에서 OBB 좌표가 퍼블리시되어 목표 위치가 틀어진 채 픽업 시도</dd>
+              <dd>로봇 이동 중 흔들린 프레임에서 OBB 좌표가 사용되어 목표 위치가 틀어진 채 픽업 시도</dd>
               <dt>원인</dt>
-              <dd>ROS2 토픽은 이동 중에도 계속 흐름. 검출 노드가 로봇 정지 여부를 인지하지 못한 채 좌표를 발행</dd>
+              <dd>이동 완료 전에 검출 결과를 읽으면 모션 블러·위치 오차로 좌표가 틀어짐</dd>
               <dt>해결</dt>
-              <dd>SetBool Service로 명시적 게이트 구현 : <br>
-                이동 전 <code>set_bool(False)</code>로 퍼블리시 차단 → 정지 확인 후
-                <code>set_bool(True)</code>로 재개 → 첫 유효 좌표 수신 → 픽업 전 재차단
+              <dd><code>move_to()</code>를 blocking 호출로 처리해 완전 정지 후에만 검출 결과를 읽도록 순차 실행 보장.<br>
+                정지 → Flange 좌표 갱신 → 첫 유효 프레임 수신 순서를 코드 흐름으로 강제.
               </dd>
               <dt>인사이트</dt>
-              <dd>"좌표는 로봇이 멈췄을 때만 유효" — 게이팅 패턴으로 이동/검출 간 타이밍 경쟁 조건 완전 제거</dd>
+              <dd>"좌표는 로봇이 멈췄을 때만 유효" — 순차 실행만으로 타이밍 문제를 구조적으로 제거</dd>
             </div>
           </div>
 
@@ -989,12 +989,12 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
 
         <div class="two-col" style="margin-top:1.5rem">
           <div>
-            <p style="font-size:13px;font-weight:600;margin-bottom:.5rem">① 10회 연속 파지 — OBB 검출 PiP</p>
+            <p style="font-size:13px;font-weight:600;margin-bottom:.5rem">① 연속 파지 — OBB 검출 PiP</p>
             <video controls
               style="width:100%;height:280px;object-fit:contain;background:#000;border-radius:8px;border:1px solid var(--border)">
               <source src="images/media1.mp4" type="video/mp4">
             </video>
-            <p class="img-caption" style="margin-top:.6rem">관측 캠 + OBB 검출 PiP 오버레이, 상자 10회 연속 파지 (4배속)</p>
+            <p class="img-caption" style="margin-top:.6rem">관측 캠 + OBB 검출 PiP 오버레이, 연속 파지 (4배속)</p>
           </div>
           <div>
             <p style="font-size:13px;font-weight:600;margin-bottom:.5rem">② AMR 트레이 Pick &amp; Place</p>
@@ -1034,7 +1034,7 @@ obb = self._detector.wait_for_detection(timeout=10.0)  <span class="cm"># 정지
           <tr>
             <td>파지 좌표 평균 오차</td>
             <td class="val">≤5 mm</td>
-            <td>그리퍼 폭 기준 오차 예산 설정 (verify.py Step B)</td>
+            <td>그리퍼 파지 폭(40 mm)의 1/8 이내 허용 기준으로 설계 목표 설정</td>
             <td>&lt;5.0 mm</td>
           </tr>
           <tr>
